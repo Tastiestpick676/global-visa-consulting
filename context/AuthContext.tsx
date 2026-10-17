@@ -6,14 +6,12 @@ import {
   User,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
   GoogleAuthProvider,
   signInWithPopup,
   signOut as firebaseSignOut,
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase/config";
-import { initializeUserAndApplication } from "@/lib/firebase/db";
 import { DestinationCountry, UserProfile, VisaApplication } from "@/types/visa";
 
 interface AuthContextType {
@@ -22,13 +20,7 @@ interface AuthContextType {
   application: VisaApplication | null;
   loading: boolean;
   signIn: (email: string, pass: string) => Promise<void>;
-  signUp: (
-    email: string,
-    pass: string,
-    fullName: string,
-    destination: DestinationCountry
-  ) => Promise<void>;
-  signInWithGoogle: (destination?: DestinationCountry) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshApplication: () => Promise<void>;
 }
@@ -41,7 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [application, setApplication] = useState<VisaApplication | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchUserData = async (currentUser: User, defaultDestination: DestinationCountry = "USA") => {
+  const fetchUserData = async (currentUser: User) => {
     try {
       const userSnap = await getDoc(doc(db, "users", currentUser.uid));
       const appSnap = await getDoc(doc(db, "applications", currentUser.uid));
@@ -49,27 +41,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (userSnap.exists() && appSnap.exists()) {
         setProfile(userSnap.data() as UserProfile);
         setApplication(appSnap.data() as VisaApplication);
+        return true;
       } else {
-        const initialized = await initializeUserAndApplication(
-          currentUser.uid,
-          currentUser.email || "",
-          currentUser.displayName || "Cliente Titular",
-          defaultDestination
-        );
-        setProfile(initialized.profile);
-        setApplication(initialized.application);
+        // Si no está registrado comercialmente en Firestore, cerramos sesión de inmediato
+        await firebaseSignOut(auth);
+        return false;
       }
     } catch {
-      // Cero console.log de datos sensibles en producción (Directiva 5.1)
+      await firebaseSignOut(auth);
+      return false;
     }
   };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
       if (currentUser) {
-        await fetchUserData(currentUser);
+        const isValid = await fetchUserData(currentUser);
+        if (isValid) {
+          setUser(currentUser);
+        } else {
+          setUser(null);
+          setProfile(null);
+          setApplication(null);
+        }
       } else {
+        setUser(null);
         setProfile(null);
         setApplication(null);
       }
@@ -80,35 +76,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = async (email: string, pass: string) => {
-    await signInWithEmailAndPassword(auth, email, pass);
+    const cred = await signInWithEmailAndPassword(auth, email, pass);
+    const isValid = await fetchUserData(cred.user);
+    if (!isValid) {
+      throw new Error("UNREGISTERED_USER");
+    }
+    setUser(cred.user);
   };
 
-  const signUp = async (
-    email: string,
-    pass: string,
-    fullName: string,
-    destination: DestinationCountry
-  ) => {
-    const cred = await createUserWithEmailAndPassword(auth, email, pass);
-    const initialized = await initializeUserAndApplication(
-      cred.user.uid,
-      email,
-      fullName,
-      destination
-    );
-    setProfile(initialized.profile);
-    setApplication(initialized.application);
-  };
-
-  const signInWithGoogle = async (destination: DestinationCountry = "USA") => {
+  const signInWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
     const cred = await signInWithPopup(auth, provider);
-    await fetchUserData(cred.user, destination);
+    const isValid = await fetchUserData(cred.user);
+    if (!isValid) {
+      throw new Error("UNREGISTERED_USER");
+    }
+    setUser(cred.user);
   };
 
   const signOut = async () => {
     await firebaseSignOut(auth);
+    setUser(null);
     setProfile(null);
     setApplication(null);
   };
@@ -127,7 +116,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         application,
         loading,
         signIn,
-        signUp,
         signInWithGoogle,
         signOut,
         refreshApplication,

@@ -4,20 +4,17 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ShieldCheck, Lock, ArrowRight, AlertCircle, Sparkles } from "lucide-react";
+import { ShieldCheck, Lock, ArrowRight, AlertCircle, Sparkles, MessageCircle } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { DestinationCountry } from "@/types/visa";
 import { Input } from "@/components/ui/input";
+import { getWhatsAppUrl } from "@/lib/constants";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { signIn, signUp, signInWithGoogle } = useAuth();
+  const { signIn, signInWithGoogle } = useAuth();
 
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [destination, setDestination] = useState<DestinationCountry>("USA");
   const [errorMsg, setErrorMsg] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -27,24 +24,14 @@ export default function LoginPage() {
     setSubmitting(true);
 
     try {
-      if (isRegistering) {
-        if (!fullName.trim()) {
-          setErrorMsg("Por favor ingresa tu nombre completo como aparece en el pasaporte.");
-          setSubmitting(false);
-          return;
-        }
-        await signUp(email, password, fullName.trim(), destination);
-      } else {
-        await signIn(email, password);
-      }
+      await signIn(email, password);
       router.push("/dashboard");
-    } catch {
-      setErrorMsg(
-        isRegistering
-          ? "No se pudo activar la cuenta. Verifica que el correo no esté en uso y que la contraseña tenga al menos 6 caracteres."
-          : "Credenciales inválidas. Verifica tu correo y contraseña."
-      );
-    } finally {
+    } catch (err: any) {
+      if (err.message === "UNREGISTERED_USER") {
+        setErrorMsg("Este correo no está registrado en nuestro sistema. Si ya contrataste tu servicio, por favor ponte en contacto con soporte.");
+      } else {
+        setErrorMsg("Credenciales inválidas. Verifica tu correo y contraseña.");
+      }
       setSubmitting(false);
     }
   };
@@ -53,11 +40,10 @@ export default function LoginPage() {
     setErrorMsg("");
     setSubmitting(true);
     try {
-      await signInWithGoogle(destination);
+      await signInWithGoogle();
       router.push("/dashboard");
-    } catch {
-      setErrorMsg("No se pudo completar el acceso con Google. Intenta nuevamente.");
-    } finally {
+    } catch (err: any) {
+      setErrorMsg("Este correo de Google no está autorizado ni registrado en nuestro sistema. Contáctanos por WhatsApp.");
       setSubmitting(false);
     }
   };
@@ -86,7 +72,7 @@ export default function LoginPage() {
             </h1>
             <p className="text-sm text-white/70 leading-relaxed">
               Toda tu información personal (PII) está protegida bajo reglas de aislamiento criptográfico. 
-              Solo tú y tu especialista legal asignado tienen acceso a este entorno.
+              El acceso es exclusivo para clientes con servicios activos provisionados.
             </p>
           </div>
         </div>
@@ -97,12 +83,12 @@ export default function LoginPage() {
             <span>Seguridad Nivel Bancario</span>
           </div>
           <p className="text-xs text-white/60 leading-relaxed">
-            Conexión directa con Firebase Cloud Firestore & Storage bajo protocolo estricto de privacidad.
+            Acceso restringido y verificado mediante expediente digital en Firestore.
           </p>
         </div>
       </div>
 
-      {/* Columna Derecha: Formulario de Acceso / Activación */}
+      {/* Columna Derecha: Formulario de Acceso */}
       <div className="lg:col-span-7 flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-md space-y-7">
           {/* Header móvil */}
@@ -122,51 +108,29 @@ export default function LoginPage() {
 
           <div className="space-y-2">
             <h2 className="font-display text-3xl font-bold text-brand-charcoal">
-              {isRegistering ? "Activar Expediente Digital" : "Bienvenido a tu Portal"}
+              Acceso al Portal
             </h2>
             <p className="text-sm text-brand-charcoal/65">
-              {isRegistering
-                ? "Crea tus credenciales privadas para comenzar a diligenciar tu solicitud."
-                : "Ingresa con tu cuenta para ver el avance de tu visa en tiempo real."}
+              Ingresa con tus credenciales autorizadas para consultar el avance de tu trámite.
             </p>
           </div>
 
-          {/* Selector de Modo (Login vs Registro) */}
-          <div className="grid grid-cols-2 rounded-xl bg-brand-platinum p-1 text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => {
-                setIsRegistering(false);
-                setErrorMsg("");
-              }}
-              className={`rounded-lg py-2.5 transition-all ${
-                !isRegistering
-                  ? "bg-brand-white text-brand-charcoal shadow-sm"
-                  : "text-brand-charcoal/60 hover:text-brand-charcoal"
-              }`}
-            >
-              Iniciar Sesión
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsRegistering(true);
-                setErrorMsg("");
-              }}
-              className={`rounded-lg py-2.5 transition-all ${
-                isRegistering
-                  ? "bg-brand-white text-brand-charcoal shadow-sm"
-                  : "text-brand-charcoal/60 hover:text-brand-charcoal"
-              }`}
-            >
-              Activar Cuenta Nueva
-            </button>
-          </div>
-
+          {/* Alerta Roja de Seguridad si el correo no está registrado */}
           {errorMsg && (
-            <div className="flex items-start gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-medium text-brand-red">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>{errorMsg}</span>
+            <div className="flex flex-col gap-3 rounded-2xl bg-brand-red/10 border border-brand-red/30 p-5 text-xs text-brand-red">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                <span className="font-medium leading-relaxed">{errorMsg}</span>
+              </div>
+              <a
+                href={getWhatsAppUrl("Hola Global Visa Consulting, intento ingresar al portal pero mi correo no está registrado o tengo un problema de acceso.")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="self-start inline-flex items-center gap-2 rounded-full bg-brand-red px-4 py-2 text-xs font-semibold text-brand-white hover:bg-brand-red/90 transition-all shadow-sm"
+              >
+                <MessageCircle className="h-3.5 w-3.5" />
+                <span>Contactar Soporte por WhatsApp</span>
+              </a>
             </div>
           )}
 
@@ -208,56 +172,6 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {isRegistering && (
-              <>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-brand-charcoal">
-                    Nombre Completo (Como figura en tu pasaporte)
-                  </label>
-                  <Input
-                    type="text"
-                    required
-                    placeholder="Ej. Carlos Andrés Mendoza"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    className="h-11 rounded-xl bg-brand-platinum/50 border-brand-platinum"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-brand-charcoal">
-                    País de Destino de tu Solicitud
-                  </label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setDestination("USA")}
-                      className={`rounded-xl border p-3 text-left transition-all ${
-                        destination === "USA"
-                          ? "border-brand-red bg-brand-red/5 text-brand-charcoal font-semibold"
-                          : "border-brand-platinum bg-brand-white text-brand-charcoal/70"
-                      }`}
-                    >
-                      <p className="text-sm">🇺🇸 Estados Unidos</p>
-                      <p className="text-[11px] text-brand-charcoal/55">Visa B1/B2 (DS-160)</p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDestination("JAPAN")}
-                      className={`rounded-xl border p-3 text-left transition-all ${
-                        destination === "JAPAN"
-                          ? "border-brand-red bg-brand-red/5 text-brand-charcoal font-semibold"
-                          : "border-brand-platinum bg-brand-white text-brand-charcoal/70"
-                      }`}
-                    >
-                      <p className="text-sm">🇯🇵 Japón</p>
-                      <p className="text-[11px] text-brand-charcoal/55">Turismo / Negocios</p>
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-brand-charcoal">
                 Correo Electrónico
@@ -291,13 +205,7 @@ export default function LoginPage() {
               disabled={submitting}
               className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-3.5 text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/20 hover:bg-brand-red/90 disabled:opacity-50 transition-all"
             >
-              <span>
-                {submitting
-                  ? "Verificando credenciales..."
-                  : isRegistering
-                  ? "Crear Cuenta e Ir al Dashboard"
-                  : "Ingresar a mi Portal"}
-              </span>
+              <span>{submitting ? "Verificando autorización..." : "Ingresar a mi Portal"}</span>
               <ArrowRight className="h-4 w-4" />
             </button>
           </form>
