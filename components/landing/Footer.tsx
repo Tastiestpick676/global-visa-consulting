@@ -52,7 +52,7 @@ export function Footer() {
           </a>
         </div>
 
-        <p>© {new Date().getFullYear()} Global Visa Consulting. Firma privada de asesoría migratoria.</p>
+        <p>© 2026 Global Visa Consulting. Firma privada de asesoría migratoria.</p>
       </div>
     </footer>
   );
