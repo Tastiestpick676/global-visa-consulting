@@ -5,6 +5,17 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* --- COLORES OFICIALES GLOBAL VISA CONSULTING --- */
+  --color-brand-red: #DE0C2E;
+  --color-brand-charcoal: #121212;
+  --color-brand-white: #FFFFFF;
+  --color-brand-platinum: #F3F4F6;
+
+  /* --- TIPOGRAFÍAS --- */
+  --font-sans: var(--font-inter), sans-serif;
+  --font-display: var(--font-outfit), sans-serif;
+
+  /* --- Resto de variables --- */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
