@@ -7,16 +7,19 @@ import { AuthProvider } from "@/context/AuthContext";
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
+  display: "swap",
 });
 
 const outfit = Outfit({
   subsets: ["latin"],
   variable: "--font-outfit",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Global Visa Consulting | Asesoría Migratoria Premium",
-  description: "Plataforma inteligente para solicitud de visas a EE. UU. y Japón.",
+  title: "Global Visa Consulting | Asesoría Migratoria de Alta Precisión",
+  description:
+    "Firma privada de consultoría migratoria para visas de Estados Unidos (B1/B2) y Japón.",
 };
 
 export default function RootLayout({
@@ -25,10 +28,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="es">
-      <body
-        className={`${inter.variable} ${outfit.variable} font-sans bg-brand-white text-brand-charcoal antialiased`}
-      >
+    <html lang="es" className={`${inter.variable} ${outfit.variable}`}>
+      <body className="font-sans bg-brand-white text-brand-charcoal antialiased selection:bg-brand-red selection:text-white">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

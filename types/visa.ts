@@ -1,62 +1,78 @@
 // types/visa.ts
-
 export type DestinationCountry = "USA" | "JAPAN";
 
-export type ApplicationStep = 
-  | 1 // Diagnóstico & Activación
-  | 2 // Recolección Inteligente (Formulario DS-160 / Japón)
-  | 3 // Bóveda de Documentos & Auditoría Legal
-  | 4; // Sala de Entrenamiento Consular & Cita
+export type PlanTier = "Essential" | "Priority Pro" | "VIP";
 
-export type ApplicationStatus = 
-  | "action_required" // Requiere acción del cliente (Rojo Acelerador)
-  | "in_review"       // En revisión por especialista
-  | "approved_ready"; // Expediente listo para entrevista
+export type UserRole = "admin" | "advisor" | "client";
+
+export type ApplicationStatus =
+  | "onboarding_pending"
+  | "in_legal_review"
+  | "documents_pending"
+  | "ready_for_consulate"
+  | "approved";
 
 export interface UserProfile {
   uid: string;
   email: string;
   fullName: string;
-  phone?: string;
+  role: UserRole;
   destination: DestinationCountry;
-  planTier: "Essential" | "Priority Pro" | "VIP & Familia";
+  planTier: PlanTier;
   createdAt: string;
 }
 
-// Datos sensibles (PII) - NUNCA hacer console.log de esta interfaz en producción
-export interface VisaFormData {
-  // 1. Datos Personales
-  givenNames: string;
-  surnames: string;
-  birthDate: string;
-  nationality: string;
-  maritalStatus: string;
-  // 2. Pasaporte
-  passportNumber: string;
-  passportIssueDate: string;
-  passportExpiryDate: string;
-  // 3. Viaje
+export interface PreApprovedUser {
+  email: string;
+  fullName: string;
+  role: UserRole;
+  destination: DestinationCountry;
+  planTier: PlanTier;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface SmartIntakeData {
+  fullName: string;
+  nationalId: string;
+  maritalStatus: "Soltero/a" | "Casado/a" | "Unión Libre" | "Divorciado/a" | "Viudo/a";
+  homeAddress: string;
+  cityAndState: string;
+  mobilePhone: string;
   purposeOfTrip: string;
-  intendedArrivalDate: string;
-  intendedStayDuration: string;
-  usAddressOrHotel: string;
-  // 4. Trabajo e Ingresos
+  estimatedArrivalDate: string;
+  stayDurationDays: string;
+  tripFinancier: "Yo mismo (Recursos propios)" | "Un familiar / Pareja (Con Carta de Garantía)" | "Empresa patrocinadora";
   currentOccupation: string;
-  employerOrCompanyName: string;
-  monthlyIncomeUSD: string;
-  hasPreviousVisaRefusal: "no" | "yes";
+  companyOrEmployerName: string;
+  monthlyIncomeLocal: string;
+  partnerOrParentsOccupation?: string;
+  japanPortOfEntry?: string;
+  japanAirlineOrFlight?: string;
+  japanCitiesToVisit?: string;
+  hasGuarantorInJapan?: "no" | "yes";
+  guarantorDetails?: string;
+  previousStayInJapan?: string;
+  socialMediaHandles?: string;
+  parentsFullNamesAndDob?: string;
+  hasRelativesInUS?: "no" | "yes";
+  relativesInUSDetails?: string;
+  previousJobsAndEducationSummary?: string;
+  hasPreviousVisaRefusal?: "no" | "yes";
   refusalExplanation?: string;
+  additionalNotes?: string;
 }
 
 export interface VisaApplication {
   id: string;
-  userId: string; // Regla de seguridad Firestore: request.auth.uid == resource.data.userId
+  userId: string;
+  clientName?: string;
+  clientEmail?: string;
   destination: DestinationCountry;
-  visaType: string; // Ej: "B1/B2 Turismo y Negocios" o "Turismo Corta Estancia"
-  currentStep: ApplicationStep;
-  progressPercentage: number;
+  visaType: string;
   status: ApplicationStatus;
-  formCompleted: boolean;
-  formData: Partial<VisaFormData>;
+  currentStep: number;
+  progressPercentage: number;
+  formData?: Partial<SmartIntakeData>;
   updatedAt: string;
 }

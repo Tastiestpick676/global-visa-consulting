@@ -1,61 +1,52 @@
 // lib/firebase/db.ts
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, setDoc } from "firebase/firestore";
 import { db } from "./config";
-import { DestinationCountry, UserProfile, VisaApplication } from "@/types/visa";
+import {
+  DestinationCountry,
+  PlanTier,
+  UserProfile,
+  UserRole,
+  VisaApplication,
+} from "@/types/visa";
 
-/**
- * Crea el perfil del usuario y su expediente inicial en Firestore
- * respetando la regla: request.auth.uid == resource.data.userId
- */
 export async function initializeUserAndApplication(
   uid: string,
   email: string,
   fullName: string,
-  destination: DestinationCountry = "USA"
+  destination: DestinationCountry = "USA",
+  role: UserRole = "client",
+  planTier: PlanTier = "Priority Pro"
 ): Promise<{ profile: UserProfile; application: VisaApplication }> {
-  const userRef = doc(db, "users", uid);
-  const appRef = doc(db, "applications", uid); // Usamos el mismo uid como ID del expediente principal
+  const now = new Date().toISOString();
 
-  const userSnap = await getDoc(userRef);
-  const appSnap = await getDoc(appRef);
+  const profile: UserProfile = {
+    uid,
+    email: email.toLowerCase(),
+    fullName,
+    role,
+    destination,
+    planTier,
+    createdAt: now,
+  };
 
-  let profile: UserProfile;
-  let application: VisaApplication;
+  const application: VisaApplication = {
+    id: uid,
+    userId: uid,
+    clientName: fullName,
+    clientEmail: email.toLowerCase(),
+    destination,
+    visaType:
+      destination === "JAPAN"
+        ? "Visa de Turismo Japón (Estancia Corta)"
+        : "Visa B1/B2 Estados Unidos",
+    status: "onboarding_pending",
+    currentStep: 2,
+    progressPercentage: 25,
+    updatedAt: now,
+  };
 
-  if (!userSnap.exists()) {
-    profile = {
-      uid,
-      email,
-      fullName,
-      destination,
-      planTier: "Priority Pro",
-      createdAt: new Date().toISOString(),
-    };
-    await setDoc(userRef, profile);
-  } else {
-    profile = userSnap.data() as UserProfile;
-  }
-
-  if (!appSnap.exists()) {
-    application = {
-      id: uid,
-      userId: uid,
-      destination,
-      visaType:
-        destination === "USA"
-          ? "Visa B1/B2 — Turismo y Negocios"
-          : "Visa Turismo — Estancia Corta Japón",
-      currentStep: 2,
-      progressPercentage: 25,
-      status: "action_required",
-      formCompleted: false,
-      formData: {},
-      updatedAt: new Date().toISOString(),
-    };
-    await setDoc(appRef, application);
-  } else {
-    application = appSnap.data() as VisaApplication;
-  }
+  await setDoc(doc(db, "users", uid), profile);
+  await setDoc(doc(db, "applications", uid), application);
 
   return { profile, application };
 }

@@ -12,7 +12,8 @@ import {
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase/config";
-import { DestinationCountry, UserProfile, VisaApplication } from "@/types/visa";
+import { initializeUserAndApplication } from "@/lib/firebase/db";
+import { PreApprovedUser, UserProfile, VisaApplication } from "@/types/visa";
 
 interface AuthContextType {
   user: User | null;
@@ -38,15 +39,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const userSnap = await getDoc(doc(db, "users", currentUser.uid));
       const appSnap = await getDoc(doc(db, "applications", currentUser.uid));
 
+      // 1. Si el usuario ya tiene perfil creado en Firestore, entra directo
       if (userSnap.exists() && appSnap.exists()) {
-        setProfile(userSnap.data() as UserProfile);
+        const userData = userSnap.data() as UserProfile;
+        // Retrocompatibilidad por si el documento se creó antes de existir el campo 'role'
+        if (!userData.role) {
+          userData.role = "client";
+        }
+        setProfile(userData);
         setApplication(appSnap.data() as VisaApplication);
         return true;
-      } else {
-        // Si no está registrado comercialmente en Firestore, cerramos sesión de inmediato
+      }
+
+      // 2. Si entra por primera vez, verificamos si fue pre-autorizado en 'allowed_emails'
+      const emailLower = (currentUser.email || "").trim().toLowerCase();
+      if (!emailLower) {
         await firebaseSignOut(auth);
         return false;
       }
+
+      const allowedSnap = await getDoc(doc(db, "allowed_emails", emailLower));
+
+      if (allowedSnap.exists()) {
+        const preData = allowedSnap.data() as PreApprovedUser;
+        const initialized = await initializeUserAndApplication(
+          currentUser.uid,
+          emailLower,
+          preData.fullName || currentUser.displayName || "Usuario Autorizado",
+          preData.destination || "USA",
+          preData.role || "client",
+          preData.planTier || "Priority Pro"
+        );
+        setProfile(initialized.profile);
+        setApplication(initialized.application);
+        return true;
+      }
+
+      // 3. Si no está en 'users' ni en 'allowed_emails', denegamos acceso
+      await firebaseSignOut(auth);
+      return false;
     } catch {
       await firebaseSignOut(auth);
       return false;
