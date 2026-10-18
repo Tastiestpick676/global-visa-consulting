@@ -63,6 +63,27 @@ export interface SmartIntakeData {
   additionalNotes?: string;
 }
 
+export interface VaultDocument {
+  docId: string;
+  title: string;
+  fileName: string;
+  fileUrl: string;
+  storagePath: string;
+  fileSize: number;
+  uploadedAt: string;
+  status: "uploaded" | "verified" | "rejected";
+  advisorFeedback?: string;
+}
+
+export interface ConsularSessionData {
+  preferredDate?: string;
+  preferredTimeSlot?: string;
+  focusConcerns?: string;
+  status?: "unscheduled" | "requested" | "confirmed" | "completed";
+  meetingLink?: string;
+  advisorNotes?: string;
+}
+
 export interface VisaApplication {
   id: string;
   userId: string;
@@ -74,5 +95,7 @@ export interface VisaApplication {
   currentStep: number;
   progressPercentage: number;
   formData?: Partial<SmartIntakeData>;
+  documents?: Record<string, VaultDocument>;
+  consularSession?: ConsularSessionData;
   updatedAt: string;
 }
