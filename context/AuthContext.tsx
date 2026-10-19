@@ -10,7 +10,7 @@ import {
   signInWithPopup,
   signOut as firebaseSignOut,
 } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase/config";
 import { initializeUserAndApplication } from "@/lib/firebase/db";
 import { PreApprovedUser, UserProfile, VisaApplication } from "@/types/visa";
@@ -20,6 +20,8 @@ interface AuthContextType {
   profile: UserProfile | null;
   application: VisaApplication | null;
   loading: boolean;
+  simulateClientView: boolean;
+  setSimulateClientView: (val: boolean) => void;
   signIn: (email: string, pass: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -33,25 +35,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [application, setApplication] = useState<VisaApplication | null>(null);
   const [loading, setLoading] = useState(true);
+  const [simulateClientView, setSimulateClientViewState] = useState(false);
 
-  const fetchUserData = async (currentUser: User) => {
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = sessionStorage.getItem("gvc_simulate_client");
+      if (saved === "true") {
+        setSimulateClientViewState(true);
+      }
+    }
+  }, []);
+
+  const setSimulateClientView = (val: boolean) => {
+    setSimulateClientViewState(val);
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("gvc_simulate_client", String(val));
+    }
+  };
+
+  // Verifica o inicializa el usuario en su primer login
+  const ensureUserInitialized = async (currentUser: User): Promise<boolean> => {
     try {
       const userSnap = await getDoc(doc(db, "users", currentUser.uid));
       const appSnap = await getDoc(doc(db, "applications", currentUser.uid));
 
-      // 1. Si el usuario ya tiene perfil creado en Firestore, entra directo
       if (userSnap.exists() && appSnap.exists()) {
-        const userData = userSnap.data() as UserProfile;
-        // Retrocompatibilidad por si el documento se creó antes de existir el campo 'role'
-        if (!userData.role) {
-          userData.role = "client";
-        }
-        setProfile(userData);
-        setApplication(appSnap.data() as VisaApplication);
         return true;
       }
 
-      // 2. Si entra por primera vez, verificamos si fue pre-autorizado en 'allowed_emails'
       const emailLower = (currentUser.email || "").trim().toLowerCase();
       if (!emailLower) {
         await firebaseSignOut(auth);
@@ -62,7 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (allowedSnap.exists()) {
         const preData = allowedSnap.data() as PreApprovedUser;
-        const initialized = await initializeUserAndApplication(
+        await initializeUserAndApplication(
           currentUser.uid,
           emailLower,
           preData.fullName || currentUser.displayName || "Usuario Autorizado",
@@ -70,12 +81,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           preData.role || "client",
           preData.planTier || "Priority Pro"
         );
-        setProfile(initialized.profile);
-        setApplication(initialized.application);
         return true;
       }
 
-      // 3. Si no está en 'users' ni en 'allowed_emails', denegamos acceso
       await firebaseSignOut(auth);
       return false;
     } catch {
@@ -85,30 +93,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    let unsubUser: (() => void) | null = null;
+    let unsubApp: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
+      if (unsubUser) unsubUser();
+      if (unsubApp) unsubApp();
+
       if (currentUser) {
-        const isValid = await fetchUserData(currentUser);
+        const isValid = await ensureUserInitialized(currentUser);
         if (isValid) {
           setUser(currentUser);
+
+          // Escucha en TIEMPO REAL el perfil del usuario
+          unsubUser = onSnapshot(doc(db, "users", currentUser.uid), (snap) => {
+            if (snap.exists()) {
+              const userData = snap.data() as UserProfile;
+              if (!userData.role) userData.role = "client";
+              setProfile(userData);
+            }
+          });
+
+          // Escucha en TIEMPO REAL el expediente (cualquier cambio del Admin actualiza la vista del cliente al instante)
+          unsubApp = onSnapshot(
+            doc(db, "applications", currentUser.uid),
+            (snap) => {
+              if (snap.exists()) {
+                setApplication(snap.data() as VisaApplication);
+              }
+              setLoading(false);
+            }
+          );
         } else {
           setUser(null);
           setProfile(null);
           setApplication(null);
+          setLoading(false);
         }
       } else {
         setUser(null);
         setProfile(null);
         setApplication(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      if (unsubUser) unsubUser();
+      if (unsubApp) unsubApp();
+      unsubscribeAuth();
+    };
   }, []);
 
   const signIn = async (email: string, pass: string) => {
     const cred = await signInWithEmailAndPassword(auth, email, pass);
-    const isValid = await fetchUserData(cred.user);
+    const isValid = await ensureUserInitialized(cred.user);
     if (!isValid) {
       throw new Error("UNREGISTERED_USER");
     }
@@ -119,7 +158,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
     const cred = await signInWithPopup(auth, provider);
-    const isValid = await fetchUserData(cred.user);
+    const isValid = await ensureUserInitialized(cred.user);
     if (!isValid) {
       throw new Error("UNREGISTERED_USER");
     }
@@ -127,6 +166,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem("gvc_simulate_client");
+    }
+    setSimulateClientViewState(false);
     await firebaseSignOut(auth);
     setUser(null);
     setProfile(null);
@@ -135,7 +178,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshApplication = async () => {
     if (user) {
-      await fetchUserData(user);
+      const appSnap = await getDoc(doc(db, "applications", user.uid));
+      if (appSnap.exists()) {
+        setApplication(appSnap.data() as VisaApplication);
+      }
     }
   };
 
@@ -146,6 +192,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profile,
         application,
         loading,
+        simulateClientView,
+        setSimulateClientView,
         signIn,
         signInWithGoogle,
         signOut,

@@ -2,6 +2,7 @@
 import { doc, setDoc } from "firebase/firestore";
 import { db } from "./config";
 import {
+  ApplicationStatus,
   DestinationCountry,
   PlanTier,
   UserProfile,
@@ -9,13 +10,161 @@ import {
   VisaApplication,
 } from "@/types/visa";
 
+export function formatDisplayName(name?: string | null): string {
+  if (!name) return "";
+  // Si viene pegado tipo "LuisGaray", inserta el espacio automáticamente -> "Luis Garay"
+  return name
+    .replace(/([a-zñáéíóú])([A-ZÑÁÉÍÓÚ])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export type StepSemaphore = "completed" | "in_progress" | "missing";
+
+export function calculateApplicationMetrics(app?: VisaApplication | null): {
+  progressPercentage: number;
+  currentStep: number;
+  autoStatus: ApplicationStatus;
+  formSemaphore: StepSemaphore;
+  vaultSemaphore: StepSemaphore;
+  consularSemaphore: StepSemaphore;
+} {
+  if (!app) {
+    return {
+      progressPercentage: 20,
+      currentStep: 1,
+      autoStatus: "onboarding_pending",
+      formSemaphore: "missing",
+      vaultSemaphore: "missing",
+      consularSemaphore: "missing",
+    };
+  }
+
+  // Si ya fue dictaminada como Aprobada o Rechazada (o Purgada tras cierre), es 100%
+  if (app.status === "approved" || app.status === "rejected") {
+    return {
+      progressPercentage: 100,
+      currentStep: 4,
+      autoStatus: app.status,
+      formSemaphore: "completed",
+      vaultSemaphore: "completed",
+      consularSemaphore: "completed",
+    };
+  }
+
+  // 1. Evaluar Cuestionario Estratégico
+  const fd = app.formData;
+  const hasAnyForm = Boolean(
+    fd && (fd.nationalId || fd.mobilePhone || fd.homeAddress || fd.currentOccupation)
+  );
+  const isFormComplete = Boolean(
+    fd &&
+      fd.fullName &&
+      fd.nationalId &&
+      fd.mobilePhone &&
+      fd.homeAddress &&
+      fd.currentOccupation &&
+      fd.estimatedArrivalDate
+  );
+
+  let formSemaphore: StepSemaphore = isFormComplete
+    ? "completed"
+    : hasAnyForm
+    ? "in_progress"
+    : "missing";
+
+  // 2. Evaluar Bóveda de Documentos
+  const docsCount = app.documents ? Object.keys(app.documents).length : 0;
+  const requiredMin = app.destination === "JAPAN" ? 4 : 3;
+  let vaultSemaphore: StepSemaphore =
+    docsCount >= requiredMin
+      ? "completed"
+      : docsCount > 0
+      ? "in_progress"
+      : "missing";
+
+  // 3. Evaluar Sala Consular & Meetings
+  const meetingsCount = app.meetings ? app.meetings.length : 0;
+  const hasDeliverable = Boolean(app.consularSession?.officialDeliverableUrl);
+  const isSessionBooked = app.consularSession?.status === "confirmed";
+
+  let consularSemaphore: StepSemaphore =
+    meetingsCount > 0 || hasDeliverable
+      ? "completed"
+      : isSessionBooked || app.assignedAdvisorId
+      ? "in_progress"
+      : "missing";
+
+  // Cálculo basado en acciones del cliente
+  let progress = 20;
+  let step = 1;
+  let autoStatus: ApplicationStatus = "onboarding_pending";
+
+  if (formSemaphore === "in_progress") {
+    progress = 35;
+    step = 2;
+  } else if (formSemaphore === "completed") {
+    progress = 50;
+    step = 2;
+    autoStatus = "documents_pending";
+  }
+
+  if (vaultSemaphore === "in_progress") {
+    progress = Math.max(progress, 65);
+    step = 3;
+    autoStatus = "in_legal_review";
+  } else if (vaultSemaphore === "completed") {
+    progress = Math.max(progress, 80);
+    step = 3;
+    autoStatus = "in_legal_review";
+  }
+
+  if (consularSemaphore === "completed" || isSessionBooked) {
+    progress = Math.max(progress, 92);
+    step = 4;
+    autoStatus = "ready_for_consulate";
+  }
+
+  // Si el Admin o Asesor adelantó manualmente la etapa en el Pipeline, sincronizamos el piso de progreso y los semáforos
+  if (app.status === "documents_pending") {
+    progress = Math.max(progress, 50);
+    step = Math.max(step, 2);
+    if (formSemaphore === "missing") formSemaphore = "in_progress";
+    autoStatus = "documents_pending";
+  } else if (app.status === "in_legal_review") {
+    progress = Math.max(progress, 75);
+    step = Math.max(step, 3);
+    if (formSemaphore === "missing") formSemaphore = "completed";
+    if (vaultSemaphore === "missing") vaultSemaphore = "in_progress";
+    autoStatus = "in_legal_review";
+  } else if (app.status === "ready_for_consulate") {
+    progress = Math.max(progress, 92);
+    step = 4;
+    formSemaphore = "completed";
+    vaultSemaphore = "completed";
+    if (consularSemaphore === "missing") consularSemaphore = "in_progress";
+    autoStatus = "ready_for_consulate";
+  }
+
+  return {
+    progressPercentage: progress,
+    currentStep: step,
+    autoStatus,
+    formSemaphore,
+    vaultSemaphore,
+    consularSemaphore,
+  };
+}
+
 export async function initializeUserAndApplication(
   uid: string,
   email: string,
   fullName: string,
   destination: DestinationCountry = "USA",
   role: UserRole = "client",
-  planTier: PlanTier = "Priority Pro"
+  planTier: PlanTier = "Priority Pro",
+  assignedAdvisorId: string = "",
+  assignedAdvisorName: string = ""
 ): Promise<{ profile: UserProfile; application: VisaApplication }> {
   const now = new Date().toISOString();
 
@@ -35,13 +184,16 @@ export async function initializeUserAndApplication(
     clientName: fullName,
     clientEmail: email.toLowerCase(),
     destination,
+    planTier,
     visaType:
       destination === "JAPAN"
         ? "Visa de Turismo Japón (Estancia Corta)"
         : "Visa B1/B2 Estados Unidos",
     status: "onboarding_pending",
-    currentStep: 2,
-    progressPercentage: 25,
+    currentStep: 1,
+    progressPercentage: 20,
+    assignedAdvisorId,
+    assignedAdvisorName,
     updatedAt: now,
   };
 

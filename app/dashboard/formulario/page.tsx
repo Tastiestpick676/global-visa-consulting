@@ -142,7 +142,7 @@ export default function FormularioPage() {
   return (
     <DashboardLayout>
       <div className="max-w-4xl mx-auto space-y-6 font-sans">
-        {/* Encabezado Ejecutivo */}
+{/* Encabezado Ejecutivo: Destino bloqueado para clientes, conmutador solo para Admin en pruebas */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 rounded-2xl bg-brand-charcoal p-7 sm:p-8 text-brand-white shadow-lg">
           <div className="space-y-2">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-red/20 px-3 py-1 text-xs font-semibold text-brand-red">
@@ -162,36 +162,46 @@ export default function FormularioPage() {
             </p>
           </div>
 
-          {/* Selector de País */}
-          <div className="rounded-xl bg-white/[0.06] p-3 border border-white/10 shrink-0 space-y-2">
-            <p className="text-[10px] uppercase tracking-widest text-white/50 text-center font-bold">
-              Formulario Activo
-            </p>
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleDestinationSwitch("USA")}
-                className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
-                  destination === "USA"
-                    ? "bg-brand-red text-white shadow-sm"
-                    : "bg-white/5 text-white/60 hover:text-white"
-                }`}
-              >
-                🇺🇸 EE. UU.
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDestinationSwitch("JAPAN")}
-                className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
-                  destination === "JAPAN"
-                    ? "bg-brand-red text-white shadow-sm"
-                    : "bg-white/5 text-white/60 hover:text-white"
-                }`}
-              >
-                🇯🇵 Japón
-              </button>
+          {profile?.role === "admin" ? (
+            <div className="rounded-xl bg-white/[0.06] p-3 border border-white/10 shrink-0 space-y-2">
+              <p className="text-[10px] uppercase tracking-widest text-white/50 text-center font-bold">
+                Test Admin: Cambiar Destino
+              </p>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleDestinationSwitch("USA")}
+                  className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                    destination === "USA"
+                      ? "bg-brand-red text-white shadow-sm"
+                      : "bg-white/5 text-white/60 hover:text-white"
+                  }`}
+                >
+                  🇺🇸 EE. UU.
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDestinationSwitch("JAPAN")}
+                  className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                    destination === "JAPAN"
+                      ? "bg-brand-red text-white shadow-sm"
+                      : "bg-white/5 text-white/60 hover:text-white"
+                  }`}
+                >
+                  🇯🇵 Japón
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-xl bg-white/[0.06] px-5 py-4 border border-white/10 shrink-0 text-center">
+              <p className="text-[10px] uppercase tracking-widest text-white/50 font-bold">
+                Jurisdicción Contratada
+              </p>
+              <p className="font-display text-base font-bold text-white mt-1">
+                {destination === "JAPAN" ? "🇯🇵 Japón" : "🇺🇸 Estados Unidos"}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Nota de extracción documental */}
