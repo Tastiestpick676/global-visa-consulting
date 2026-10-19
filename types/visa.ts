@@ -87,6 +87,24 @@ export interface VaultDocument {
   advisorFeedback?: string;
 }
 
+// Documentos oficiales subidos por Admin/Asesor al perfil del cliente (DS-160, Confirmación Cita, Schedule of Stay, etc.)
+export interface OfficialDeliverableItem {
+  id: string;
+  title: string;
+  category:
+    | "Confirmación DS-160"
+    | "Cita Consular / CAS"
+    | "Formulario Embajada Japón"
+    | "Schedule of Stay (Itinerario)"
+    | "Otro Documento Oficial";
+  fileName: string;
+  fileUrl: string;
+  storagePath: string;
+  fileSize: number;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
 export interface ConsularResourceItem {
   id: string;
   title: string;
@@ -99,12 +117,11 @@ export interface ConsularResourceItem {
     | "Video YouTube"
     | "Instagram / Post";
   url?: string;
-  storagePath?: string; // Para eliminar el archivo físico de Firebase Storage cuando se borra el post
+  storagePath?: string;
   destination: DestinationCountry | "ALL";
   updatedAt: string;
 }
 
-// Registro de Meetings / Sesiones realizadas con el cliente
 export interface CaseMeetingRecord {
   id: string;
   date: string;
@@ -159,6 +176,7 @@ export interface VisaApplication {
   assignedAdvisorBookingUrl?: string;
   isDecommissioned?: boolean;
   decommissionedAt?: string;
+  officialDeliverables?: OfficialDeliverableItem[];
   meetings?: CaseMeetingRecord[];
   historicalCases?: HistoricalCaseSummary[];
   formData?: Partial<SmartIntakeData>;

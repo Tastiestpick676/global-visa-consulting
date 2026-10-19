@@ -1,5 +1,4 @@
-//app/dashboard/perfil/page.tsx
-
+// app/dashboard/perfil/page.tsx
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
@@ -17,14 +16,21 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import {
+  ref,
+  uploadBytes,
+  getDownloadURL,
+  deleteObject,
+} from "firebase/storage";
 import {
   DestinationCountry,
   HistoricalCaseSummary,
+  OfficialDeliverableItem,
   PreApprovedUser,
   UserProfile,
   VisaApplication,
 } from "@/types/visa";
+import { formatDisplayName } from "@/lib/firebase/db";
 import {
   UserCircle,
   Mail,
@@ -43,12 +49,14 @@ import {
   Sparkles,
   History,
   PlusCircle,
+  FileCheck2,
+  FileDown,
+  Trash2,
 } from "lucide-react";
 
 const inputBaseClass =
   "h-11 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-3.5 text-sm font-sans text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all";
 
-// Extrae automáticamente la URL si el asesor pega el bloque HTML <iframe src="..."> de Google Calendar
 function extractCleanBookingUrl(rawInput: string): string {
   const trimmed = rawInput.trim();
   if (!trimmed) return "";
@@ -91,6 +99,15 @@ function PerfilContent() {
   const [photoUrl, setPhotoUrl] = useState("");
   const [bookingUrl, setBookingUrl] = useState("");
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  // Subida directa de documentos oficiales desde la Ficha 360° (Solo Admin/Asesor)
+  const [delivTitle, setDelivTitle] = useState("");
+  const [delivCategory, setDelivCategory] = useState<
+    OfficialDeliverableItem["category"]
+  >("Confirmación DS-160");
+  const [delivFile, setDelivFile] = useState<File | null>(null);
+  const [uploadingDeliv, setUploadingDeliv] = useState(false);
+
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -104,7 +121,8 @@ function PerfilContent() {
           setViewedProfile(profile);
           setViewedApp(application);
 
-          const nameParts = (profile.fullName || "").trim().split(" ");
+          const cleanFull = formatDisplayName(profile.fullName);
+          const nameParts = cleanFull.split(" ");
           setFirstName(profile.firstName || nameParts[0] || "");
           setLastName(
             profile.lastName || nameParts.slice(1).join(" ") || ""
@@ -215,7 +233,9 @@ function PerfilContent() {
     setErrorMsg("");
 
     try {
-      const combinedName = `${firstName.trim()} ${lastName.trim()}`.trim();
+      const combinedName = formatDisplayName(
+        `${firstName.trim()} ${lastName.trim()}`
+      );
       let cleanBookingUrl = extractCleanBookingUrl(bookingUrl);
 
       if (cleanBookingUrl.includes("calendar.app.google")) {
@@ -267,13 +287,97 @@ function PerfilContent() {
       await refreshApplication();
       setFeedback(
         profile.role === "admin" || profile.role === "advisor"
-          ? "¡Perfil y Agenda Insertada guardados! Tu calendario embebido ya está activo en la Sala Consular de tus clientes asignados."
+          ? "¡Perfil y Agenda Insertada guardados!"
           : "¡Tus datos de perfil han sido actualizados correctamente!"
       );
     } catch {
       setErrorMsg("No se pudieron guardar los cambios del perfil.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Subir documento oficial al perfil del cliente desde la Ficha 360°
+  const handleStaffUploadDeliverable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!viewedApp || !delivFile) return;
+    setUploadingDeliv(true);
+    setFeedback("");
+    setErrorMsg("");
+
+    try {
+      const safeName = delivFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `vault/${viewedApp.id}/deliverables/${Date.now()}_${safeName}`;
+      const fileRef = ref(storage, storagePath);
+
+      await uploadBytes(fileRef, delivFile);
+      const fileUrl = await getDownloadURL(fileRef);
+
+      const newDeliv: OfficialDeliverableItem = {
+        id: `deliv_${Date.now()}`,
+        title: delivTitle.trim() || delivCategory,
+        category: delivCategory,
+        fileName: delivFile.name,
+        fileUrl,
+        storagePath,
+        fileSize: delivFile.size,
+        uploadedBy: formatDisplayName(profile?.fullName) || "Equipo Legal",
+        uploadedAt: new Date().toISOString(),
+      };
+
+      const updatedList = [
+        newDeliv,
+        ...(viewedApp.officialDeliverables || []),
+      ];
+
+      await updateDoc(doc(db, "applications", viewedApp.id), {
+        officialDeliverables: updatedList,
+        consularSession: {
+          ...(viewedApp.consularSession || {}),
+          officialDeliverableTitle: newDeliv.title,
+          officialDeliverableUrl: newDeliv.fileUrl,
+        },
+        updatedAt: new Date().toISOString(),
+      });
+
+      setViewedApp((prev) =>
+        prev ? { ...prev, officialDeliverables: updatedList } : null
+      );
+      setDelivTitle("");
+      setDelivFile(null);
+      setFeedback(
+        `Documento "${newDeliv.title}" publicado en el perfil del cliente.`
+      );
+    } catch {
+      setErrorMsg("No se pudo subir el documento al perfil del cliente.");
+    } finally {
+      setUploadingDeliv(false);
+    }
+  };
+
+  const handleStaffDeleteDeliverable = async (
+    item: OfficialDeliverableItem
+  ) => {
+    if (!viewedApp) return;
+    try {
+      if (item.storagePath) {
+        try {
+          await deleteObject(ref(storage, item.storagePath));
+        } catch {}
+      }
+      const updatedList = (viewedApp.officialDeliverables || []).filter(
+        (d) => d.id !== item.id
+      );
+      await updateDoc(doc(db, "applications", viewedApp.id), {
+        officialDeliverables: updatedList,
+        updatedAt: new Date().toISOString(),
+      });
+      setViewedApp((prev) =>
+        prev ? { ...prev, officialDeliverables: updatedList } : null
+      );
+      setFeedback("Documento eliminado del perfil del cliente.");
+    } catch {
+      setErrorMsg("No se pudo eliminar el documento.");
     }
   };
 
@@ -290,7 +394,9 @@ function PerfilContent() {
         destination: viewedApp.destination,
         status: viewedApp.status,
         closedAt: new Date().toISOString().split("T")[0],
-        advisorName: viewedApp.assignedAdvisorName || "Equipo Global Visa",
+        advisorName:
+          formatDisplayName(viewedApp.assignedAdvisorName) ||
+          "Equipo Global Visa",
       };
 
       const updatedHistory = [
@@ -307,8 +413,8 @@ function PerfilContent() {
         destination: newDest,
         visaType: nextVisaType,
         status: "onboarding_pending",
-        currentStep: 2,
-        progressPercentage: 25,
+        currentStep: 1,
+        progressPercentage: 20,
         isDecommissioned: false,
         historicalCases: updatedHistory,
         updatedAt: new Date().toISOString(),
@@ -321,8 +427,8 @@ function PerfilContent() {
               destination: newDest,
               visaType: nextVisaType,
               status: "onboarding_pending",
-              currentStep: 2,
-              progressPercentage: 25,
+              currentStep: 1,
+              progressPercentage: 20,
               historicalCases: updatedHistory,
             }
           : null
@@ -346,12 +452,16 @@ function PerfilContent() {
     );
   }
 
+  // ============================================================================
+  // MODO A: FICHA 360° DE UN CLIENTE (Vista para Admin / Asesor)
+  // ============================================================================
   if (isInspectingOther) {
-    const displayName =
+    const displayName = formatDisplayName(
       viewedApp?.formData?.fullName ||
-      viewedProfile?.fullName ||
-      viewedPreApproved?.fullName ||
-      "Cliente Registrado";
+        viewedProfile?.fullName ||
+        viewedPreApproved?.fullName ||
+        "Cliente Registrado"
+    );
     const displayEmail =
       viewedProfile?.email ||
       viewedApp?.clientEmail ||
@@ -376,6 +486,8 @@ function PerfilContent() {
       viewedPreApproved?.destination ||
       "USA";
 
+    const clientDeliverables = viewedApp?.officialDeliverables || [];
+
     return (
       <div className="max-w-5xl mx-auto space-y-6 font-sans">
         <div className="flex items-center justify-between">
@@ -385,7 +497,7 @@ function PerfilContent() {
             className="inline-flex items-center gap-2 rounded-full bg-brand-white border border-brand-charcoal/10 px-4 py-2 text-xs font-semibold text-brand-charcoal hover:bg-brand-platinum transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
-            <span>Volver al Directorio</span>
+            <span>Volver</span>
           </button>
           <span className="rounded-full bg-brand-charcoal px-3.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white">
             Ficha 360° de Cliente • Vista Staff
@@ -396,6 +508,12 @@ function PerfilContent() {
           <div className="flex items-center gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             <span>{feedback}</span>
+          </div>
+        )}
+        {errorMsg && (
+          <div className="flex items-center gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{errorMsg}</span>
           </div>
         )}
 
@@ -416,7 +534,9 @@ function PerfilContent() {
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-brand-red/20 px-3 py-0.5 text-[10px] font-bold uppercase text-brand-red">
-                  {displayRole === "client" ? `Cliente • Plan ${displayPlan}` : displayRole.toUpperCase()}
+                  {displayRole === "client"
+                    ? `Cliente • Plan ${displayPlan}`
+                    : displayRole.toUpperCase()}
                 </span>
                 <span className="rounded-full bg-white/10 px-3 py-0.5 text-[10px] font-bold uppercase text-white/80">
                   {displayDest === "JAPAN" ? "🇯🇵 Japón" : "🇺🇸 Estados Unidos"}
@@ -443,13 +563,145 @@ function PerfilContent() {
               Asesor Asignado
             </p>
             <p className="font-display text-sm font-bold text-white mt-1">
-              {viewedApp?.assignedAdvisorName || "⚠️ Sin Asignar (En Bolsa)"}
+              {formatDisplayName(viewedApp?.assignedAdvisorName) ||
+                "⚠️ Sin Asignar (En Bolsa)"}
             </p>
-            <p className="text-[11px] text-brand-red font-semibold mt-0.5">
-              {viewedApp ? `Avance Actual: ${viewedApp.progressPercentage}%` : "Pendiente 1er Login"}
-            </p>
+            {viewedApp && (
+              <button
+                type="button"
+                onClick={() =>
+                  router.push(`/dashboard/admin/caso/${viewedApp.id}`)
+                }
+                className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand-red px-4 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-red/90 transition-all"
+              >
+                <span>Abrir Workspace del Caso</span>
+              </button>
+            )}
           </div>
         </div>
+
+        {/* MÓDULO PARA SUBIR DS-160 / CONFIRMACIONES DIRECTAMENTE AL PERFIL DEL CLIENTE */}
+        {viewedApp && (
+          <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-5">
+            <div className="flex items-center justify-between border-b border-brand-platinum pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <FileCheck2 className="h-5 w-5 text-brand-red" />
+                <div>
+                  <h3 className="font-display text-base font-bold text-brand-charcoal">
+                    Documentos Oficiales Emitidos en el Perfil del Cliente ({clientDeliverables.length})
+                  </h3>
+                  <p className="text-xs text-brand-charcoal/55">
+                    Sube aquí la Hoja de Confirmación DS-160, Cita Consular o Formatos de Japón. El cliente los verá en su propio perfil listos para descargar.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <form
+              onSubmit={handleStaffUploadDeliverable}
+              className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end bg-brand-platinum/30 p-4 rounded-2xl border border-brand-platinum"
+            >
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-brand-charcoal">
+                  Categoría Oficial
+                </label>
+                <select
+                  value={delivCategory}
+                  onChange={(e) => setDelivCategory(e.target.value as any)}
+                  className={inputBaseClass}
+                >
+                  <option value="Confirmación DS-160">Confirmación DS-160</option>
+                  <option value="Cita Consular / CAS">Cita Consular / CAS</option>
+                  <option value="Formulario Embajada Japón">Formulario Japón</option>
+                  <option value="Schedule of Stay (Itinerario)">Schedule of Stay</option>
+                  <option value="Otro Documento Oficial">Otro Documento</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-brand-charcoal">
+                  Título del Documento
+                </label>
+                <input
+                  type="text"
+                  value={delivTitle}
+                  onChange={(e) => setDelivTitle(e.target.value)}
+                  placeholder="Ej. Confirmación DS-160 Oficial"
+                  className={inputBaseClass}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-brand-charcoal">
+                  Archivo PDF / Imagen
+                </label>
+                <label className="cursor-pointer flex items-center justify-between h-11 rounded-xl border border-dashed border-brand-red/40 bg-brand-white px-3.5 text-xs font-semibold text-brand-charcoal">
+                  <span className="truncate pr-2">
+                    {delivFile ? delivFile.name : "Elegir PDF..."}
+                  </span>
+                  <UploadCloud className="h-4 w-4 text-brand-red shrink-0" />
+                  <input
+                    type="file"
+                    required
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    className="hidden"
+                    onChange={(e) => setDelivFile(e.target.files?.[0] || null)}
+                  />
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={uploadingDeliv || !delivFile}
+                className="h-11 inline-flex items-center justify-center gap-2 rounded-xl bg-brand-red px-4 text-xs font-semibold text-white hover:bg-brand-red/90 disabled:opacity-50 transition-all"
+              >
+                <UploadCloud className="h-4 w-4" />
+                <span>{uploadingDeliv ? "Subiendo..." : "Subir al Perfil"}</span>
+              </button>
+            </form>
+
+            {clientDeliverables.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                {clientDeliverables.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between rounded-2xl border border-brand-platinum p-3.5 text-xs"
+                  >
+                    <div className="truncate pr-3">
+                      <span className="text-[10px] font-bold uppercase text-brand-red">
+                        {item.category}
+                      </span>
+                      <p className="font-bold text-brand-charcoal truncate">
+                        {item.title}
+                      </p>
+                      <p className="text-[10px] text-brand-charcoal/50 truncate">
+                        {item.fileName}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <a
+                        href={item.fileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-full bg-brand-charcoal px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-red transition-colors"
+                      >
+                        <span>Abrir</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => handleStaffDeleteDeliverable(item)}
+                        className="p-1.5 text-brand-charcoal/40 hover:text-brand-red transition-colors"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {viewedApp ? (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -496,16 +748,6 @@ function PerfilContent() {
                     <span className="font-bold text-brand-charcoal">
                       {viewedApp.formData.currentOccupation} • {viewedApp.formData.companyOrEmployerName} ({viewedApp.formData.monthlyIncomeLocal})
                     </span>
-                  </div>
-                  <div className="rounded-xl bg-brand-platinum/40 p-3.5">
-                    <span className="text-brand-charcoal/55 block">Fecha Estimada & Estancia:</span>
-                    <span className="font-bold text-brand-charcoal">
-                      {viewedApp.formData.estimatedArrivalDate || "---"} ({viewedApp.formData.stayDurationDays})
-                    </span>
-                  </div>
-                  <div className="rounded-xl bg-brand-platinum/40 p-3.5">
-                    <span className="text-brand-charcoal/55 block">Financiación del Viaje:</span>
-                    <span className="font-bold text-brand-charcoal">{viewedApp.formData.tripFinancier}</span>
                   </div>
                 </div>
               )}
@@ -568,7 +810,7 @@ function PerfilContent() {
                     {viewedApp.visaType}
                   </p>
                   <p className="text-[11px] text-brand-charcoal/60">
-                    Asesor: {viewedApp.assignedAdvisorName || "Sin asignar"}
+                    Asesor: {formatDisplayName(viewedApp.assignedAdvisorName) || "Sin asignar"}
                   </p>
                 </div>
 
@@ -646,6 +888,11 @@ function PerfilContent() {
     );
   }
 
+  // ============================================================================
+  // MODO B: MI PERFIL PROPIO (Admin, Asesor o Cliente)
+  // ============================================================================
+  const myOfficialDeliverables = application?.officialDeliverables || [];
+
   return (
     <div className="max-w-4xl mx-auto space-y-6 font-sans">
       <div className="rounded-3xl bg-brand-charcoal p-7 sm:p-8 text-white shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-6">
@@ -687,7 +934,7 @@ function PerfilContent() {
               </span>
             </span>
             <h2 className="font-display text-2xl sm:text-3xl font-bold">
-              {profile?.fullName || "Mi Perfil"}
+              {formatDisplayName(profile?.fullName) || "Mi Perfil"}
             </h2>
             <p className="text-xs text-white/65">{profile?.email}</p>
           </div>
@@ -707,6 +954,66 @@ function PerfilContent() {
         </div>
       )}
 
+{/* WIDGET EXCLUSIVO PARA CLIENTES: DOCUMENTOS Y ARCHIVOS GENERADOS POR EL ASESOR */}
+      {!isStaff && (
+        <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-5">
+          <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
+            <FileCheck2 className="h-5 w-5 text-brand-red shrink-0" />
+            <div>
+              <h3 className="font-display text-base font-bold text-brand-charcoal">
+                Documentos y Archivos de tu Proceso
+              </h3>
+              <p className="text-xs text-brand-charcoal/55">
+                Aquí encontrarás los formularios oficiales, confirmaciones, itinerarios y soportes que tu asesor irá generando durante cada etapa de tu solicitud.
+              </p>
+            </div>
+          </div>
+
+          {myOfficialDeliverables.length === 0 ? (
+            <div className="rounded-2xl bg-brand-platinum/30 p-6 border border-brand-platinum text-center space-y-1.5">
+              <p className="text-xs font-bold text-brand-charcoal">
+                Aún no hay archivos generados en tu perfil
+              </p>
+              <p className="text-[11px] text-brand-charcoal/55 max-w-lg mx-auto leading-relaxed">
+                A medida que avance tu proceso, aquí irán apareciendo los documentos, confirmaciones y archivos oficiales elaborados por tu asesor listos para consultar o descargar.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {myOfficialDeliverables.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between rounded-2xl bg-emerald-500/[0.04] border border-emerald-500/25 p-4"
+                >
+                  <div className="truncate pr-3 space-y-0.5">
+                    <span className="inline-block rounded bg-emerald-600 px-2 py-0.5 text-[9px] font-bold uppercase text-white">
+                      {item.category}
+                    </span>
+                    <p className="text-xs font-bold text-brand-charcoal truncate pt-1">
+                      {item.title}
+                    </p>
+                    <p className="text-[10px] text-brand-charcoal/55 truncate">
+                      Generado por {item.uploadedBy}
+                    </p>
+                  </div>
+
+                  <a
+                    href={item.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-full bg-brand-charcoal px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-brand-red transition-all"
+                  >
+                    <FileDown className="h-3.5 w-3.5" />
+                    <span>Descargar</span>
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Formulario de Datos Personales */}
       <form
         onSubmit={handleSaveMyProfile}
         className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-6"
@@ -789,7 +1096,7 @@ function PerfilContent() {
                   Mi Página de Reserva Insertada (Exclusiva para mis casos asignados)
                 </h4>
                 <p className="text-xs text-brand-charcoal/55">
-                  Puedes pegar directamente el <strong>código HTML <code>&lt;iframe src=&quot;...&quot;&gt;</code> de Google Calendar</strong> (&ldquo;Página de reserva insertada&rdquo;) o la URL directa. El sistema extraerá el enlace embebible automáticamente.
+                  Puedes pegar directamente el <strong>código HTML <code>&lt;iframe src=&quot;...&quot;&gt;</code> de Google Calendar</strong> (&ldquo;Página de reserva insertada&rdquo;) o la URL directa.
                 </p>
               </div>
             </div>
@@ -854,11 +1161,11 @@ function PerfilContent() {
                   <button
                     type="button"
                     onClick={() =>
-                      router.push(`/dashboard/perfil?uid=${c.id}`)
+                      router.push(`/dashboard/admin/caso/${c.id}`)
                     }
                     className="rounded-full bg-brand-charcoal px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-brand-red transition-colors"
                   >
-                    Ver Ficha 360°
+                    Gestionar Caso
                   </button>
                 </div>
               ))}
@@ -885,7 +1192,10 @@ function PerfilContent() {
                 </p>
                 <p className="text-xs text-brand-charcoal/60">
                   Asesor Asignado:{" "}
-                  <strong>{application.assignedAdvisorName || "En asignación por coordinación legal"}</strong>
+                  <strong>
+                    {formatDisplayName(application.assignedAdvisorName) ||
+                      "En asignación por coordinación legal"}
+                  </strong>
                 </p>
               </div>
               <button
