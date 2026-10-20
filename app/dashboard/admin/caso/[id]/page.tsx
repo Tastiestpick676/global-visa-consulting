@@ -55,6 +55,7 @@ import {
   UploadCloud,
   ShieldAlert,
   ArrowRightCircle,
+  X,
 } from "lucide-react";
 
 const inputBaseClass =
@@ -105,8 +106,8 @@ interface StageTransitionPrompt {
   targetStatus: ApplicationStatus;
   targetLabel: string;
   direction: "forward" | "backward";
-  blockingErrors: string[]; // Si tiene al menos 1, NO permite avanzar (requisito obligatorio faltante)
-  warnings: string[]; // Permite avanzar o retroceder bajo doble confirmación del Asesor/Admin
+  blockingErrors: string[];
+  warnings: string[];
 }
 
 function CaseWorkspaceContent() {
@@ -123,12 +124,10 @@ function CaseWorkspaceContent() {
   const [loading, setLoading] = useState(true);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  // Estado para Doble Confirmación de Cambio de Etapa (Tanto Adelante como Atrás) y Bloqueos Obligatorios
   const [transitionPrompt, setTransitionPrompt] =
     useState<StageTransitionPrompt | null>(null);
   const [showResolutionModal, setShowResolutionModal] = useState(false);
 
-  // Estado para Subir Documento Oficial al Perfil del Cliente (DS-160, Cita, Schedule of Stay)
   const [delivTitle, setDelivTitle] = useState("");
   const [delivCategory, setDelivCategory] = useState<
     OfficialDeliverableItem["category"]
@@ -136,7 +135,6 @@ function CaseWorkspaceContent() {
   const [delivFile, setDelivFile] = useState<File | null>(null);
   const [uploadingDeliv, setUploadingDeliv] = useState(false);
 
-  // Estado para Registrar un Nuevo Meeting
   const [meetingDate, setMeetingDate] = useState(
     new Date().toISOString().split("T")[0]
   );
@@ -150,6 +148,22 @@ function CaseWorkspaceContent() {
   const [errorMsg, setErrorMsg] = useState("");
 
   const isStaff = profile?.role === "admin" || profile?.role === "advisor";
+
+  // 1. Limpiar alertas al cambiar de pestaña dentro del Workspace
+  useEffect(() => {
+    setFeedback("");
+    setErrorMsg("");
+  }, [activeWorkspaceTab]);
+
+  // 2. Auto-ocultar las alertas después de 5 segundos
+  useEffect(() => {
+    if (!feedback && !errorMsg) return;
+    const timer = setTimeout(() => {
+      setFeedback("");
+      setErrorMsg("");
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [feedback, errorMsg]);
 
   useEffect(() => {
     if (!isStaff || !caseId) return;
@@ -191,7 +205,6 @@ function CaseWorkspaceContent() {
     setTimeout(() => setCopiedField(null), 1800);
   };
 
-  // Evalúa requisitos obligatorios y advertencias antes de permitir avanzar o retroceder
   const evaluateStageTransition = (targetStatus: ApplicationStatus) => {
     if (!appData || appData.status === targetStatus) return;
 
@@ -235,14 +248,12 @@ function CaseWorkspaceContent() {
     const meetingsCount = appData.meetings?.length || 0;
 
     if (direction === "forward") {
-      // Reglas para avanzar a Etapa 2 (Bóveda Documental) o superior
       if (targetOrder >= 2 && !isFormComplete) {
         blockingErrors.push(
           "Obligatorio: El cliente aún no ha completado los campos requeridos del Cuestionario Estratégico (Nombre, Cédula, Teléfono, Dirección, Ocupación y Fecha de viaje)."
         );
       }
 
-      // Reglas para avanzar a Etapa 3 (Auditoría Legal) o superior
       if (targetOrder >= 3) {
         if (!hasPassport) {
           blockingErrors.push(
@@ -261,7 +272,6 @@ function CaseWorkspaceContent() {
         }
       }
 
-      // Reglas para avanzar a Etapa 4 (Listo Consulado) o Dictamen Final
       if (targetOrder >= 4) {
         if (unverifiedDocsCount > 0) {
           warnings.push(
@@ -280,7 +290,6 @@ function CaseWorkspaceContent() {
         }
       }
     } else {
-      // Reglas al retroceder de etapa
       warnings.push(
         `El expediente ya se encontraba en una fase más avanzada (Paso ${currentMetrics.currentStep} de 4). Al retroceder a "${targetLabel}", el porcentaje del cliente se ajustará hacia atrás.`
       );
@@ -383,7 +392,6 @@ function CaseWorkspaceContent() {
     }
   };
 
-  // Subir Documento Oficial (DS-160, Confirmaciones, Schedule of Stay) al Perfil del Cliente
   const handleUploadOfficialDeliverable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!appData || !delivFile) return;
@@ -426,7 +434,7 @@ function CaseWorkspaceContent() {
       setDelivTitle("");
       setDelivFile(null);
       setFeedback(
-        `¡Documento "${newDeliv.title}" subido al perfil del cliente! El cliente ya puede visualizarlo y descargarlo desde su Perfil y su Sala Consular.`
+        `¡Documento "${newDeliv.title}" subido al perfil del cliente!`
       );
     } catch {
       setErrorMsg("No se pudo subir el documento oficial a Firebase Storage.");
@@ -632,7 +640,7 @@ function CaseWorkspaceContent() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 font-sans">
-      {/* MODAL UNIFICADO DE VALIDACIÓN Y DOBLE CONFIRMACIÓN (AVANCE Y RETROCESO) */}
+      {/* MODAL UNIFICADO DE VALIDACIÓN Y DOBLE CONFIRMACIÓN */}
       {transitionPrompt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="w-full max-w-lg rounded-3xl bg-brand-white p-7 border border-brand-charcoal/10 shadow-2xl space-y-5">
@@ -668,13 +676,12 @@ function CaseWorkspaceContent() {
               </div>
             </div>
 
-            {/* Si hay errores obligatorios bloqueantes */}
             {transitionPrompt.blockingErrors.length > 0 ? (
               <div className="space-y-3">
                 <p className="text-xs text-brand-charcoal/75 leading-relaxed">
                   No es posible mover el expediente de{" "}
                   <strong>
-                    {appData.formData?.fullName || appData.clientName}
+                    {formatDisplayName(appData.formData?.fullName || appData.clientName)}
                   </strong>{" "}
                   a <strong>{transitionPrompt.targetLabel}</strong> porque aún no cumple con los siguientes requisitos obligatorios:
                 </p>
@@ -691,12 +698,11 @@ function CaseWorkspaceContent() {
                 </div>
               </div>
             ) : (
-              /* Si no hay bloqueos, muestra advertencias de qué falta (si aplica) y pide doble confirmación */
               <div className="space-y-3">
                 <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
                   ¿Confirmas cambiar el estado del expediente de{" "}
                   <strong>
-                    {appData.formData?.fullName || appData.clientName}
+                    {formatDisplayName(appData.formData?.fullName || appData.clientName)}
                   </strong>{" "}
                   a{" "}
                   <strong className="text-brand-charcoal">
@@ -899,7 +905,7 @@ function CaseWorkspaceContent() {
               )}
             </div>
             <h2 className="font-display text-2xl sm:text-3xl font-bold">
-              {appData.formData?.fullName || appData.clientName || "Cliente Titular"}
+              {formatDisplayName(appData.formData?.fullName || appData.clientName) || "Cliente Titular"}
             </h2>
             <p className="text-xs text-white/65">
               Correo: <strong className="text-white">{appData.clientEmail}</strong> • Teléfono:{" "}
@@ -981,15 +987,35 @@ function CaseWorkspaceContent() {
       </div>
 
       {feedback && (
-        <div className="flex items-center gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <span>{feedback}</span>
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
+          <div className="flex items-center gap-3">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{feedback}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFeedback("")}
+            className="rounded-lg p-1 text-emerald-700/60 hover:bg-emerald-500/20 hover:text-emerald-900 transition-colors"
+            aria-label="Cerrar alerta"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
       {errorMsg && (
-        <div className="flex items-center gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{errorMsg}</span>
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setErrorMsg("")}
+            className="rounded-lg p-1 text-brand-red/60 hover:bg-brand-red/20 hover:text-brand-red transition-colors"
+            aria-label="Cerrar alerta"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
 
@@ -1286,7 +1312,7 @@ function CaseWorkspaceContent() {
         </div>
       )}
 
-      {/* TAB 3: SUBIR ENTREGABLES OFICIALES AL PERFIL DEL CLIENTE (DS-160, CONFIRMACIONES, FORMATOS) */}
+      {/* TAB 3: SUBIR ENTREGABLES OFICIALES AL PERFIL DEL CLIENTE */}
       {activeWorkspaceTab === "entregables" && (
         <div className="space-y-6">
           <form
@@ -1300,7 +1326,7 @@ function CaseWorkspaceContent() {
                   Subir Documentos Oficiales al Perfil del Cliente (DS-160, Confirmaciones, Itinerarios)
                 </h3>
                 <p className="text-xs text-brand-charcoal/55">
-                  Los archivos que cargues aquí aparecerán automáticamente en el widget de <strong>&ldquo;Mis Documentos Oficiales&rdquo;</strong> dentro del Perfil y la Sala Consular del cliente (solo lectura y descarga para él).
+                  Los archivos que cargues aquí aparecerán automáticamente en el widget de <strong>&ldquo;Documentos y Archivos de tu Proceso&rdquo;</strong> dentro del Perfil y la Sala Consular del cliente.
                 </p>
               </div>
             </div>
@@ -1601,7 +1627,6 @@ function CaseWorkspaceContent() {
   );
 }
 
-// Exportación principal envuelta en <Suspense> para evitar el error CLIENT_HOOK_DYNAMIC de useParams() en Next.js 16
 export default function CaseWorkspacePage() {
   return (
     <DashboardLayout>

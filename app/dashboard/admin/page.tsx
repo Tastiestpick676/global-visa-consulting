@@ -92,6 +92,21 @@ function AdminDashboardContent() {
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  // 1. Limpiar alertas automáticamente cada vez que el usuario cambie de pestaña en el Sidebar
+  useEffect(() => {
+    setFeedback("");
+    setErrorMsg("");
+  }, [activeTab]);
+
+  // 2. Auto-ocultar las alertas después de 5 segundos
+  useEffect(() => {
+    if (!feedback && !errorMsg) return;
+    const timer = setTimeout(() => {
+      setFeedback("");
+      setErrorMsg("");
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [feedback, errorMsg]);
 
   const isStaff = profile?.role === "admin" || profile?.role === "advisor";
 

@@ -6,6 +6,8 @@ import {
   User,
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   GoogleAuthProvider,
   signInWithPopup,
   signOut as firebaseSignOut,
@@ -24,6 +26,7 @@ interface AuthContextType {
   setSimulateClientView: (val: boolean) => void;
   signIn: (email: string, pass: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
+  requestPasswordReset: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshApplication: () => Promise<void>;
 }
@@ -53,7 +56,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Verifica o inicializa el usuario en su primer login
   const ensureUserInitialized = async (currentUser: User): Promise<boolean> => {
     try {
       const userSnap = await getDoc(doc(db, "users", currentUser.uid));
@@ -105,7 +107,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (isValid) {
           setUser(currentUser);
 
-          // Escucha en TIEMPO REAL el perfil del usuario
           unsubUser = onSnapshot(doc(db, "users", currentUser.uid), (snap) => {
             if (snap.exists()) {
               const userData = snap.data() as UserProfile;
@@ -114,7 +115,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
           });
 
-          // Escucha en TIEMPO REAL el expediente (cualquier cambio del Admin actualiza la vista del cliente al instante)
           unsubApp = onSnapshot(
             doc(db, "applications", currentUser.uid),
             (snap) => {
@@ -146,7 +146,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = async (email: string, pass: string) => {
-    const cred = await signInWithEmailAndPassword(auth, email, pass);
+    const cleanEmail = email.trim().toLowerCase();
+    const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
     const isValid = await ensureUserInitialized(cred.user);
     if (!isValid) {
       throw new Error("UNREGISTERED_USER");
@@ -163,6 +164,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error("UNREGISTERED_USER");
     }
     setUser(cred.user);
+  };
+
+  // Flujo Seguro de Recuperación / Creación de Contraseña Inicial para Usuarios Autorizados
+  const requestPasswordReset = async (rawEmail: string) => {
+    const cleanEmail = rawEmail.trim().toLowerCase();
+    if (!cleanEmail) return;
+
+    const actionCodeSettings = {
+      url:
+        typeof window !== "undefined"
+          ? `${window.location.origin}/reset-password`
+          : "http://localhost:3000/reset-password",
+      handleCodeInApp: false,
+    };
+
+    try {
+      // 1. Verificamos si el correo está autorizado en nuestra lista blanca (allowed_emails)
+      const allowedSnap = await getDoc(doc(db, "allowed_emails", cleanEmail));
+      if (!allowedSnap.exists()) {
+        // Por seguridad (Anti-Enumeración), si no está en allowed_emails no enviamos nada pero resolvemos sin error
+        return;
+      }
+
+      try {
+        // 2. Intentamos enviar el correo de restablecimiento directamente
+        await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
+      } catch (err: any) {
+        // 3. Si el usuario fue dado de alta en el Backoffice pero NUNCA ha creado su cuenta en Firebase Auth,
+        // inicializamos su cuenta con una entropía criptográfica temporal y disparamos el correo de inmediato
+        if (
+          err?.code === "auth/user-not-found" ||
+          err?.code === "auth/invalid-email"
+        ) {
+          const randomEntropy = `Gvc#${ crypto.randomUUID() }!9a`;
+          const newCred = await createUserWithEmailAndPassword(
+            auth,
+            cleanEmail,
+            randomEntropy
+          );
+          await ensureUserInitialized(newCred.user);
+          await firebaseSignOut(auth);
+          await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
+        }
+      }
+    } catch {
+      // Silenciamos errores internos para cumplir con el estándar anti-enumeración de cuentas
+    }
   };
 
   const signOut = async () => {
@@ -196,6 +244,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSimulateClientView,
         signIn,
         signInWithGoogle,
+        requestPasswordReset,
         signOut,
         refreshApplication,
       }}

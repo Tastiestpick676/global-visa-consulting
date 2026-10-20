@@ -52,6 +52,7 @@ import {
   FileCheck2,
   FileDown,
   Trash2,
+  X,
 } from "lucide-react";
 
 const inputBaseClass =
@@ -100,7 +101,6 @@ function PerfilContent() {
   const [bookingUrl, setBookingUrl] = useState("");
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  // Subida directa de documentos oficiales desde la Ficha 360° (Solo Admin/Asesor)
   const [delivTitle, setDelivTitle] = useState("");
   const [delivCategory, setDelivCategory] = useState<
     OfficialDeliverableItem["category"]
@@ -111,6 +111,16 @@ function PerfilContent() {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Auto-ocultar las alertas después de 5 segundos
+  useEffect(() => {
+    if (!feedback && !errorMsg) return;
+    const timer = setTimeout(() => {
+      setFeedback("");
+      setErrorMsg("");
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [feedback, errorMsg]);
 
   useEffect(() => {
     const loadProfileData = async () => {
@@ -297,7 +307,6 @@ function PerfilContent() {
     }
   };
 
-  // Subir documento oficial al perfil del cliente desde la Ficha 360°
   const handleStaffUploadDeliverable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!viewedApp || !delivFile) return;
@@ -505,15 +514,35 @@ function PerfilContent() {
         </div>
 
         {feedback && (
-          <div className="flex items-center gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>{feedback}</span>
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              <span>{feedback}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFeedback("")}
+              className="rounded-lg p-1 text-emerald-700/60 hover:bg-emerald-500/20 hover:text-emerald-900 transition-colors"
+              aria-label="Cerrar alerta"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         )}
         {errorMsg && (
-          <div className="flex items-center gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>{errorMsg}</span>
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setErrorMsg("")}
+              className="rounded-lg p-1 text-brand-red/60 hover:bg-brand-red/20 hover:text-brand-red transition-colors"
+              aria-label="Cerrar alerta"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         )}
 
@@ -580,7 +609,6 @@ function PerfilContent() {
           </div>
         </div>
 
-        {/* MÓDULO PARA SUBIR DS-160 / CONFIRMACIONES DIRECTAMENTE AL PERFIL DEL CLIENTE */}
         {viewedApp && (
           <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-5">
             <div className="flex items-center justify-between border-b border-brand-platinum pb-3.5">
@@ -942,19 +970,39 @@ function PerfilContent() {
       </div>
 
       {feedback && (
-        <div className="flex items-center gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <span>{feedback}</span>
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
+          <div className="flex items-center gap-3">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{feedback}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFeedback("")}
+            className="rounded-lg p-1 text-emerald-700/60 hover:bg-emerald-500/20 hover:text-emerald-900 transition-colors"
+            aria-label="Cerrar alerta"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
       {errorMsg && (
-        <div className="flex items-center gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{errorMsg}</span>
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setErrorMsg("")}
+            className="rounded-lg p-1 text-brand-red/60 hover:bg-brand-red/20 hover:text-brand-red transition-colors"
+            aria-label="Cerrar alerta"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
 
-{/* WIDGET EXCLUSIVO PARA CLIENTES: DOCUMENTOS Y ARCHIVOS GENERADOS POR EL ASESOR */}
+      {/* WIDGET EXCLUSIVO PARA CLIENTES: DOCUMENTOS Y ARCHIVOS GENERADOS POR EL ASESOR */}
       {!isStaff && (
         <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-5">
           <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
@@ -1152,7 +1200,7 @@ function PerfilContent() {
                 >
                   <div>
                     <p className="text-xs font-bold text-brand-charcoal">
-                      {c.formData?.fullName || c.clientName}
+                      {formatDisplayName(c.formData?.fullName || c.clientName)}
                     </p>
                     <p className="text-[11px] text-brand-charcoal/60">
                       {c.visaType} • {c.progressPercentage}%

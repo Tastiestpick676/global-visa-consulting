@@ -1,219 +1,487 @@
 // app/login/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ShieldCheck, Lock, ArrowRight, AlertCircle, Sparkles, MessageCircle } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { Input } from "@/components/ui/input";
+import {
+  ShieldCheck,
+  Lock,
+  ArrowRight,
+  AlertCircle,
+  Sparkles,
+  MessageCircle,
+  CheckCircle2,
+  KeyRound,
+  ShieldAlert,
+  ArrowLeft,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import { getWhatsAppUrl } from "@/lib/constants";
 
-export default function LoginPage() {
-  const router = useRouter();
-  const { signIn, signInWithGoogle } = useAuth();
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutos de bloqueo por fuerza bruta
 
+export default function LoginPage() {
+  const [mode, setMode] = useState<"login" | "forgot">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  const [error, setError] = useState("");
+  const [unregisteredAlert, setUnregisteredAlert] = useState(false);
+  const [resetSentSuccess, setResetSentSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Protección contra Fuerza Bruta y Accesos Sospechosos
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
+
+  const { signIn, signInWithGoogle, requestPasswordReset } = useAuth();
+  const router = useRouter();
+
+  // Cargar estado de bloqueo desde localStorage al iniciar
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const savedAttempts = Number(
+      localStorage.getItem("gvc_auth_attempts") || "0"
+    );
+    const savedLockout = Number(
+      localStorage.getItem("gvc_auth_lockout_until") || "0"
+    );
+
+    setFailedAttempts(savedAttempts);
+    if (savedLockout > Date.now()) {
+      setLockoutUntil(savedLockout);
+    } else if (savedLockout !== 0) {
+      localStorage.removeItem("gvc_auth_lockout_until");
+      localStorage.setItem("gvc_auth_attempts", "0");
+      setFailedAttempts(0);
+    }
+  }, []);
+
+  // Contador regresivo en vivo cuando la cuenta está bloqueada temporalmente
+  useEffect(() => {
+    if (!lockoutUntil) {
+      setRemainingSeconds(0);
+      return;
+    }
+
+    const updateTimer = () => {
+      const diff = Math.ceil((lockoutUntil - Date.now()) / 1000);
+      if (diff <= 0) {
+        setLockoutUntil(null);
+        setFailedAttempts(0);
+        setRemainingSeconds(0);
+        localStorage.removeItem("gvc_auth_lockout_until");
+        localStorage.setItem("gvc_auth_attempts", "0");
+      } else {
+        setRemainingSeconds(diff);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutUntil]);
+
+  const registerFailedAttempt = (forceLockout = false) => {
+    const nextAttempts = forceLockout
+      ? MAX_FAILED_ATTEMPTS
+      : failedAttempts + 1;
+    setFailedAttempts(nextAttempts);
+    localStorage.setItem("gvc_auth_attempts", String(nextAttempts));
+
+    if (nextAttempts >= MAX_FAILED_ATTEMPTS) {
+      const lockTime = Date.now() + LOCKOUT_DURATION_MS;
+      setLockoutUntil(lockTime);
+      localStorage.setItem("gvc_auth_lockout_until", String(lockTime));
+    }
+  };
+
+  const resetSecurityCounters = () => {
+    setFailedAttempts(0);
+    setLockoutUntil(null);
+    localStorage.removeItem("gvc_auth_attempts");
+    localStorage.removeItem("gvc_auth_lockout_until");
+  };
+
+  const isLocked = Boolean(lockoutUntil && lockoutUntil > Date.now());
+
+  const handleSubmitLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg("");
+    if (isLocked) return;
+
+    setError("");
+    setUnregisteredAlert(false);
     setSubmitting(true);
 
     try {
       await signIn(email, password);
+      resetSecurityCounters();
       router.push("/dashboard");
     } catch (err: any) {
-      if (err.message === "UNREGISTERED_USER") {
-        setErrorMsg("Este correo no está registrado en nuestro sistema. Si ya contrataste tu servicio, por favor ponte en contacto con soporte.");
+      if (err?.message === "UNREGISTERED_USER") {
+        setUnregisteredAlert(true);
+        registerFailedAttempt();
+      } else if (err?.code === "auth/too-many-requests") {
+        registerFailedAttempt(true);
+        setError(
+          "Hemos detectado actividad inusual o múltiples intentos fallidos desde tu red. El acceso se ha bloqueado temporalmente por seguridad."
+        );
       } else {
-        setErrorMsg("Credenciales inválidas. Verifica tu correo y contraseña.");
+        registerFailedAttempt();
+        const remaining = Math.max(0, MAX_FAILED_ATTEMPTS - (failedAttempts + 1));
+        setError(
+          remaining > 0
+            ? `Credenciales inválidas. Si es tu primer ingreso sin Google o no recuerdas tu clave, usa "¿Olvidaste tu contraseña?". (${remaining} intentos restantes antes del bloqueo de seguridad).`
+            : "Se ha alcanzado el límite de intentos fallidos permitidos."
+        );
       }
+    } finally {
       setSubmitting(false);
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setErrorMsg("");
+  const handleSubmitForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLocked) return;
+
+    setError("");
+    setResetSentSuccess(false);
+    setSubmitting(true);
+
+    try {
+      await requestPasswordReset(email);
+      setResetSentSuccess(true);
+    } catch {
+      // Siempre mostramos el mismo mensaje neutro por seguridad anti-enumeración
+      setResetSentSuccess(true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    if (isLocked) return;
+    setError("");
+    setUnregisteredAlert(false);
     setSubmitting(true);
     try {
       await signInWithGoogle();
+      resetSecurityCounters();
       router.push("/dashboard");
     } catch (err: any) {
-      setErrorMsg("Este correo de Google no está autorizado ni registrado en nuestro sistema. Contáctanos por WhatsApp.");
+      if (err?.message === "UNREGISTERED_USER") {
+        setUnregisteredAlert(true);
+      } else {
+        setError("No se pudo iniciar sesión con Google. Inténtalo de nuevo.");
+      }
+    } finally {
       setSubmitting(false);
     }
   };
 
+  const formatCooldown = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
+
   return (
-    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-brand-white">
-      {/* Columna Izquierda: Panel Ejecutivo en Carbón Absoluto */}
-      <div className="hidden lg:flex lg:col-span-5 bg-brand-charcoal text-brand-white p-12 flex-col justify-between">
-        <div>
+    <div className="min-h-screen bg-brand-white grid grid-cols-1 lg:grid-cols-12 font-sans">
+      {/* Columna Izquierda: Branding y Seguridad */}
+      <div className="hidden lg:flex lg:col-span-5 bg-brand-charcoal text-brand-white p-12 flex-col justify-between relative overflow-hidden">
+        <div className="relative z-10">
           <Link href="/" className="inline-flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red text-brand-white">
-              <ShieldCheck className="h-6 w-6" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red text-brand-white shadow-md shadow-brand-red/20">
+              <ShieldCheck className="h-5 w-5" />
             </div>
             <span className="font-display text-lg font-bold tracking-tight">
               GLOBAL VISA CONSULTING
             </span>
           </Link>
 
-          <div className="mt-20 space-y-6">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-1.5 text-xs font-medium text-white/80">
+          <div className="mt-20 space-y-5">
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3.5 py-1.5 text-xs font-semibold text-white/90">
               <Sparkles className="h-3.5 w-3.5 text-brand-red" />
               <span>Portal Privado de Clientes</span>
             </div>
             <h1 className="font-display text-4xl font-bold leading-tight">
               Control total de tu expediente migratorio en tiempo real.
             </h1>
-            <p className="text-sm text-white/70 leading-relaxed">
-              Toda tu información personal (PII) está protegida bajo reglas de aislamiento criptográfico. 
-              El acceso es exclusivo para clientes con servicios activos provisionados.
+            <p className="text-sm text-white/70 leading-relaxed max-w-md">
+              Toda tu información personal (PII) está protegida bajo reglas de aislamiento criptográfico, detección de fuerza bruta y verificación de identidad.
             </p>
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white/5 p-6 border border-white/10 space-y-2">
-          <div className="flex items-center gap-2 text-xs font-semibold text-brand-red uppercase tracking-wider">
+        <div className="relative z-10 rounded-2xl bg-white/5 border border-white/10 p-5 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-brand-red uppercase tracking-wider">
             <Lock className="h-4 w-4" />
-            <span>Seguridad Nivel Bancario</span>
+            <span>Seguridad Nivel Bancario • Zero-Trust</span>
           </div>
-          <p className="text-xs text-white/60 leading-relaxed">
-            Acceso restringido y verificado mediante expediente digital en Firestore.
+          <p className="text-xs text-white/60">
+            Monitoreo activo contra intentos fallidos, enlaces de recuperación con expiración automática y cifrado TLS 1.3.
           </p>
         </div>
       </div>
 
-      {/* Columna Derecha: Formulario de Acceso */}
+      {/* Columna Derecha: Formulario de Login o Recuperación de Contraseña */}
       <div className="lg:col-span-7 flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-md space-y-7">
-          {/* Header móvil */}
-          <div className="lg:hidden flex items-center justify-between border-b border-brand-platinum pb-4">
-            <Link href="/" className="inline-flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-red text-brand-white">
-                <ShieldCheck className="h-5 w-5" />
+          {/* ALERTA DE BLOQUEO TEMPORAL POR INTENTOS FALLIDOS / ATAQUE DE FUERZA BRUTA */}
+          {isLocked && (
+            <div className="rounded-2xl bg-brand-red/10 border-2 border-brand-red p-5 space-y-2.5 shadow-lg">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-brand-red font-display text-sm font-bold">
+                  <ShieldAlert className="h-5 w-5 shrink-0" />
+                  <span>Cuenta Protegida Temporalmente</span>
+                </div>
+                <span className="rounded-full bg-brand-red px-3 py-0.5 font-mono text-xs font-bold text-white">
+                  {formatCooldown(remainingSeconds)}
+                </span>
               </div>
-              <span className="font-display text-base font-bold text-brand-charcoal">
-                GLOBAL VISA
-              </span>
-            </Link>
-            <Link href="/" className="text-xs font-semibold text-brand-charcoal/60 hover:text-brand-charcoal">
-              ← Volver al inicio
-            </Link>
-          </div>
-
-          <div className="space-y-2">
-            <h2 className="font-display text-3xl font-bold text-brand-charcoal">
-              Acceso al Portal
-            </h2>
-            <p className="text-sm text-brand-charcoal/65">
-              Ingresa con tus credenciales autorizadas para consultar el avance de tu trámite.
-            </p>
-          </div>
-
-          {/* Alerta Roja de Seguridad si el correo no está registrado */}
-          {errorMsg && (
-            <div className="flex flex-col gap-3 rounded-2xl bg-brand-red/10 border border-brand-red/30 p-5 text-xs text-brand-red">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
-                <span className="font-medium leading-relaxed">{errorMsg}</span>
-              </div>
-              <a
-                href={getWhatsAppUrl("Hola Global Visa Consulting, intento ingresar al portal pero mi correo no está registrado o tengo un problema de acceso.")}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="self-start inline-flex items-center gap-2 rounded-full bg-brand-red px-4 py-2 text-xs font-semibold text-brand-white hover:bg-brand-red/90 transition-all shadow-sm"
-              >
-                <MessageCircle className="h-3.5 w-3.5" />
-                <span>Contactar Soporte por WhatsApp</span>
-              </a>
+              <p className="text-xs text-brand-charcoal/80 leading-relaxed">
+                Por protocolos de seguridad contra accesos no autorizados, hemos bloqueado temporalmente los intentos de inicio de sesión tras detectar múltiples fallos consecutivos.
+              </p>
             </div>
           )}
 
-          {/* Botón Oficial de Google */}
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            disabled={submitting}
-            className="w-full inline-flex items-center justify-center gap-3 rounded-full border border-brand-charcoal/15 bg-brand-white px-6 py-3.5 text-sm font-semibold text-brand-charcoal shadow-xs hover:bg-brand-platinum/60 disabled:opacity-50 transition-all"
-          >
-            <svg className="h-5 w-5" viewBox="0 0 24 24">
-              <path
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                fill="#4285F4"
-              />
-              <path
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                fill="#34A853"
-              />
-              <path
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                fill="#FBBC05"
-              />
-              <path
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                fill="#EA4335"
-              />
-            </svg>
-            <span>Continuar con Google</span>
-          </button>
+          {mode === "login" ? (
+            <>
+              <div className="space-y-2">
+                <h2 className="font-display text-3xl font-bold text-brand-charcoal">
+                  Acceso al Portal
+                </h2>
+                <p className="text-xs sm:text-sm text-brand-charcoal/60">
+                  Ingresa con tus credenciales autorizadas para consultar el avance de tu trámite.
+                </p>
+              </div>
 
-          {/* Separador */}
-          <div className="relative flex items-center justify-center">
-            <div className="w-full border-t border-brand-platinum" />
-            <span className="bg-brand-white px-4 text-[11px] font-medium uppercase tracking-wider text-brand-charcoal/45 shrink-0">
-              o con tu correo
-            </span>
-            <div className="w-full border-t border-brand-platinum" />
-          </div>
+              {/* Alerta cuando el usuario NO está registrado en allowed_emails */}
+              {unregisteredAlert && (
+                <div className="rounded-2xl bg-brand-charcoal text-white p-5 space-y-3 border-l-4 border-brand-red shadow-lg">
+                  <div className="flex items-center gap-2 text-brand-red font-bold text-xs uppercase tracking-wider">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    <span>Cuenta No Provisionada</span>
+                  </div>
+                  <p className="text-xs text-white/80 leading-relaxed">
+                    Este correo aún no tiene un expediente activo en <strong>Global Visa Consulting</strong>. El acceso al portal es exclusivo para clientes que ya han iniciado su servicio.
+                  </p>
+                  <a
+                    href={getWhatsAppUrl(
+                      "Hola Global Visa Consulting, intenté ingresar al portal de clientes pero mi correo aún no está habilitado."
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-full bg-brand-red px-4 py-2 text-xs font-semibold text-white hover:bg-brand-red/90 transition-all"
+                  >
+                    <MessageCircle className="h-3.5 w-3.5" />
+                    <span>Solicitar Activación por WhatsApp</span>
+                  </a>
+                </div>
+              )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-brand-charcoal">
-                Correo Electrónico
-              </label>
-              <Input
-                type="email"
-                required
-                placeholder="cliente@correo.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="h-11 rounded-xl bg-brand-platinum/50 border-brand-platinum"
-              />
+              {error && !isLocked && (
+                <div className="flex items-start gap-2.5 rounded-xl bg-brand-red/10 border border-brand-red/30 p-3.5 text-xs font-semibold text-brand-red">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* Botón de Google */}
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                disabled={submitting || isLocked}
+                className="w-full flex items-center justify-center gap-3 rounded-full border border-brand-charcoal/15 bg-brand-white px-6 py-3.5 text-xs sm:text-sm font-semibold text-brand-charcoal shadow-2xs hover:bg-brand-platinum/60 transition-all disabled:opacity-50"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                  />
+                </svg>
+                <span>Continuar con Google</span>
+              </button>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-brand-platinum" />
+                <span className="shrink mx-4 text-[11px] font-semibold uppercase tracking-widest text-brand-charcoal/40">
+                  o con tu correo
+                </span>
+                <div className="flex-grow border-t border-brand-platinum" />
+              </div>
+
+              <form onSubmit={handleSubmitLogin} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-brand-charcoal">
+                    Correo Electrónico
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    disabled={isLocked}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="cliente@correo.com"
+                    className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-4 text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none disabled:opacity-50"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      Contraseña Privada
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode("forgot");
+                        setError("");
+                        setResetSentSuccess(false);
+                      }}
+                      className="text-xs font-semibold text-brand-red hover:underline"
+                    >
+                      ¿Olvidaste o aún no tienes contraseña?
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      required
+                      disabled={isLocked}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 pl-4 pr-11 text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-brand-charcoal/45 hover:text-brand-charcoal"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting || isLocked}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all disabled:opacity-50"
+                >
+                  <span>
+                    {submitting
+                      ? "Verificando credenciales..."
+                      : "Ingresar a mi Portal"}
+                  </span>
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </form>
+            </>
+          ) : (
+            /* MODO: CONFIGURAR O RESTABLECER CONTRASEÑA (ESTÁNDAR FINTECH ANTI-ENUMERACIÓN) */
+            <div className="space-y-6">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("login");
+                  setResetSentSuccess(false);
+                  setError("");
+                }}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-charcoal/60 hover:text-brand-charcoal transition-colors"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Volver al inicio de sesión</span>
+              </button>
+
+              <div className="space-y-2">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-red/10 text-brand-red">
+                  <KeyRound className="h-5 w-5" />
+                </div>
+                <h2 className="font-display text-2xl sm:text-3xl font-bold text-brand-charcoal pt-1">
+                  Restablecer o Crear Contraseña
+                </h2>
+                <p className="text-xs sm:text-sm text-brand-charcoal/60 leading-relaxed">
+                  Si tu cuenta fue creada por nuestro equipo o si olvidaste tu clave, ingresa tu correo autorizado para recibir un enlace seguro de configuración.
+                </p>
+              </div>
+
+              {resetSentSuccess ? (
+                <div className="rounded-2xl bg-emerald-500/10 border border-emerald-500/30 p-5 space-y-3">
+                  <div className="flex items-center gap-2.5 text-emerald-800 font-display text-sm font-bold">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+                    <span>Solicitud Procesada con Seguridad</span>
+                  </div>
+                  <p className="text-xs text-emerald-950/80 leading-relaxed">
+                    Si el correo <strong>{email}</strong> se encuentra registrado y autorizado en nuestro sistema, recibirás en los próximos minutos un enlace criptográfico de un solo uso para configurar tu contraseña.
+                  </p>
+                  <p className="text-[11px] text-emerald-900/60">
+                    Por seguridad, el enlace expirará automáticamente tras su uso o después del tiempo límite establecido. Revisa también tu bandeja de Spam o Promociones.
+                  </p>
+                </div>
+              ) : (
+                <form
+                  onSubmit={handleSubmitForgotPassword}
+                  className="space-y-4"
+                >
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      Correo Electrónico Autorizado
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      disabled={isLocked}
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="cliente@correo.com"
+                      className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-4 text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={submitting || isLocked}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-charcoal px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg hover:bg-brand-red transition-all disabled:opacity-50"
+                  >
+                    <span>
+                      {submitting
+                        ? "Generando enlace seguro..."
+                        : "Enviar Enlace de Contraseña"}
+                    </span>
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </form>
+              )}
             </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-brand-charcoal">
-                Contraseña Privada
-              </label>
-              <Input
-                type="password"
-                required
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="h-11 rounded-xl bg-brand-platinum/50 border-brand-platinum"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-3.5 text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/20 hover:bg-brand-red/90 disabled:opacity-50 transition-all"
-            >
-              <span>{submitting ? "Verificando autorización..." : "Ingresar a mi Portal"}</span>
-              <ArrowRight className="h-4 w-4" />
-            </button>
-          </form>
+          )}
 
           <div className="pt-4 border-t border-brand-platinum text-center">
             <Link
               href="/"
-              className="text-xs font-medium text-brand-charcoal/60 hover:text-brand-charcoal transition-colors"
+              className="text-xs font-medium text-brand-charcoal/50 hover:text-brand-charcoal"
             >
               ← Volver a la página principal de Global Visa Consulting
             </Link>
