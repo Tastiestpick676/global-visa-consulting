@@ -11,8 +11,28 @@ export async function GET(request: Request) {
   }
 
   try {
-    if (targetUrl.includes("calendar.app.google")) {
-      const response = await fetch(targetUrl, {
+    // Escudo de Seguridad SSRF: Solo permitimos dominios oficiales de Google Calendar / Calendly / Cal.com
+    const parsed = new URL(targetUrl.trim());
+    const allowedDomains = [
+      "calendar.app.google",
+      "calendar.google.com",
+      "calendly.com",
+      "cal.com",
+    ];
+    const isAllowed = allowedDomains.some(
+      (domain) =>
+        parsed.hostname === domain || parsed.hostname.endsWith(`.${domain}`)
+    );
+
+    if (!isAllowed) {
+      return NextResponse.json(
+        { error: "Dominio de calendario no autorizado por política de seguridad." },
+        { status: 403 }
+      );
+    }
+
+    if (parsed.hostname === "calendar.app.google") {
+      const response = await fetch(parsed.toString(), {
         method: "GET",
         redirect: "follow",
         headers: {
@@ -21,19 +41,17 @@ export async function GET(request: Request) {
         },
       });
       const finalUrl = new URL(response.url);
-      // gv=true habilita el modo limpio embebible de Google Appointment Schedule
       finalUrl.searchParams.set("gv", "true");
       return NextResponse.json({ resolvedUrl: finalUrl.toString() });
     }
 
-    if (targetUrl.includes("calendar.google.com/calendar/appointments")) {
-      const finalUrl = new URL(targetUrl);
-      finalUrl.searchParams.set("gv", "true");
-      return NextResponse.json({ resolvedUrl: finalUrl.toString() });
+    if (parsed.hostname.includes("calendar.google.com")) {
+      parsed.searchParams.set("gv", "true");
+      return NextResponse.json({ resolvedUrl: parsed.toString() });
     }
 
-    return NextResponse.json({ resolvedUrl: targetUrl });
+    return NextResponse.json({ resolvedUrl: parsed.toString() });
   } catch {
-    return NextResponse.json({ resolvedUrl: targetUrl });
+    return NextResponse.json({ resolvedUrl: "" }, { status: 400 });
   }
 }

@@ -5,19 +5,24 @@ import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { useAuth } from "@/context/AuthContext";
 import { db } from "@/lib/firebase/config";
-import { doc, updateDoc } from "firebase/firestore";
-import { SmartIntakeData, DestinationCountry } from "@/types/visa";
+import { doc, setDoc } from "firebase/firestore";
+import { DestinationCountry, SmartIntakeData } from "@/types/visa";
 import {
-  CheckCircle2,
+  buildAuditLogEntry,
+  calculateApplicationMetrics,
+  sendInternalNotification,
+} from "@/lib/firebase/db";
+import {
   Save,
-  Sparkles,
+  CheckCircle2,
   AlertCircle,
-  ShieldCheck,
-  FileCheck2,
+  Sparkles,
+  User,
   Plane,
-  UserCheck,
   Briefcase,
-  ChevronDown,
+  ShieldAlert,
+  Lock,
+  X,
 } from "lucide-react";
 
 const defaultIntake: SmartIntakeData = {
@@ -25,22 +30,22 @@ const defaultIntake: SmartIntakeData = {
   nationalId: "",
   maritalStatus: "Soltero/a",
   homeAddress: "",
-  cityAndState: "Barranquilla, Atlántico",
+  cityAndState: "",
   mobilePhone: "",
-  purposeOfTrip: "Turismo",
+  purposeOfTrip: "Turismo y vacaciones",
   estimatedArrivalDate: "",
-  stayDurationDays: "13 días",
+  stayDurationDays: "15 días",
   tripFinancier: "Yo mismo (Recursos propios)",
   currentOccupation: "",
   companyOrEmployerName: "",
   monthlyIncomeLocal: "",
   partnerOrParentsOccupation: "",
-  japanPortOfEntry: "Narita, Tokio (NRT)",
-  japanAirlineOrFlight: "",
+  japanPortOfEntry: "Aeropuerto Internacional de Narita (Tokio)",
+  japanAirlineOrFlight: "Por definir (Itinerario proyectado)",
   japanCitiesToVisit: "Tokio, Kioto y Osaka",
   hasGuarantorInJapan: "no",
   guarantorDetails: "",
-  previousStayInJapan: "Ninguna",
+  previousStayInJapan: "No, primera vez visitando Japón",
   socialMediaHandles: "",
   parentsFullNamesAndDob: "",
   hasRelativesInUS: "no",
@@ -51,89 +56,133 @@ const defaultIntake: SmartIntakeData = {
   additionalNotes: "",
 };
 
-const inputBaseClass =
-  "h-11 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-3.5 text-sm font-sans text-brand-charcoal placeholder:text-brand-charcoal/40 focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all";
+const inputClass =
+  "h-11 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-4 text-sm font-sans text-brand-charcoal placeholder:text-brand-charcoal/35 focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all disabled:opacity-60 disabled:cursor-not-allowed";
 
-const selectBaseClass =
-  "h-11 w-full appearance-none rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 pl-3.5 pr-9 text-sm font-sans text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all";
-
-const textareaBaseClass =
-  "w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 p-3.5 text-sm font-sans text-brand-charcoal placeholder:text-brand-charcoal/40 focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all";
+const textareaClass =
+  "w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 p-4 text-sm font-sans text-brand-charcoal placeholder:text-brand-charcoal/35 focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all disabled:opacity-60 disabled:cursor-not-allowed";
 
 export default function FormularioPage() {
   const { user, profile, application, refreshApplication } = useAuth();
   const [destination, setDestination] = useState<DestinationCountry>("USA");
   const [formData, setFormData] = useState<SmartIntakeData>(defaultIntake);
   const [saving, setSaving] = useState(false);
-  const [successMsg, setSuccessMsg] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
+  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [error, setError] = useState("");
+
+  const isStaff = profile?.role === "admin" || profile?.role === "advisor";
+
+  // 4. Bloqueo automático cuando el expediente ya pasó a Auditoría Legal / Listo Consulado (salvo que el asesor lo desbloquee)
+  const isLockedStage =
+    application?.status === "in_legal_review" ||
+    application?.status === "ready_for_consulate" ||
+    application?.status === "approved" ||
+    application?.status === "rejected";
+
+  const isFormLockedForClient =
+    !isStaff && isLockedStage && !application?.formUnlockedByAdvisor;
 
   useEffect(() => {
-    const activeDest = application?.destination || profile?.destination || "USA";
-    setDestination(activeDest);
+    if (!savedSuccess && !error) return;
+    const timer = setTimeout(() => {
+      setSavedSuccess(false);
+      setError("");
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [savedSuccess, error]);
 
-    if (application?.formData) {
-      setFormData((prev) => ({
-        ...prev,
-        ...application.formData,
-        fullName: application.formData?.fullName || profile?.fullName || "",
-      }));
-    } else if (profile?.fullName) {
-      setFormData((prev) => ({ ...prev, fullName: profile.fullName }));
+  useEffect(() => {
+    if (application) {
+      if (application.destination) {
+        setDestination(application.destination);
+      }
+      if (application.formData) {
+        setFormData((prev) => ({
+          ...prev,
+          ...application.formData,
+        }));
+      } else if (profile?.fullName) {
+        setFormData((prev) => ({ ...prev, fullName: profile.fullName }));
+      }
     }
   }, [application, profile]);
 
-  const handleChange = (field: keyof SmartIntakeData, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleDestinationSwitch = async (newDest: DestinationCountry) => {
-    setDestination(newDest);
-    if (!user) return;
-    try {
-      await updateDoc(doc(db, "applications", user.uid), {
-        destination: newDest,
-        visaType:
-          newDest === "JAPAN"
-            ? "Visa de Turismo Japón (Estancia Corta)"
-            : "Visa B1/B2 Estados Unidos",
-      });
-      await updateDoc(doc(db, "users", user.uid), {
-        destination: newDest,
-      });
-      await refreshApplication();
-    } catch {
-      // Silencioso seguro PII
-    }
+  const handleChange = (
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+    >
+  ) => {
+    if (isFormLockedForClient) return;
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    setSavedSuccess(false);
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || isFormLockedForClient) return;
+
     setSaving(true);
-    setSuccessMsg("");
-    setErrorMsg("");
+    setError("");
+    setSavedSuccess(false);
 
     try {
-      const appRef = doc(db, "applications", user.uid);
+      const auditEntry = buildAuditLogEntry(
+        "Actualización de Cuestionario Estratégico",
+        `El titular actualizó los datos de su formulario (${destination}).`,
+        formData.fullName || profile?.fullName || "Cliente",
+        profile?.role || "client"
+      );
 
-      await updateDoc(appRef, {
+      const nextAuditLogs = [
+        auditEntry,
+        ...(application?.auditLogs || []),
+      ];
+
+      const simulatedApp = {
+        ...(application || {}),
+        id: user.uid,
+        userId: user.uid,
         destination,
         formData,
-        progressPercentage: 65,
-        currentStep: 3,
-        status: "in_legal_review",
-        updatedAt: new Date().toISOString(),
-      });
+      } as any;
+
+      const metrics = calculateApplicationMetrics(simulatedApp);
+
+      await setDoc(
+        doc(db, "applications", user.uid),
+        {
+          id: user.uid,
+          userId: user.uid,
+          clientName: formData.fullName || profile?.fullName || "Cliente",
+          clientEmail: profile?.email || user.email || "",
+          destination,
+          visaType:
+            destination === "JAPAN"
+              ? "Visa de Turismo Japón (Estancia Corta)"
+              : "Visa B1/B2 Estados Unidos",
+          formData,
+          status: metrics.autoStatus,
+          progressPercentage: metrics.progressPercentage,
+          currentStep: metrics.currentStep,
+          auditLogs: nextAuditLogs,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
+      // Enviar notificación interna al Asesor asignado (o al canal STAFF si está en bolsa)
+      await sendInternalNotification(
+        application?.assignedAdvisorId || "STAFF",
+        `Cuestionario actualizado: ${formData.fullName || profile?.fullName}`,
+        `El cliente ha guardado cambios en su Cuestionario Estratégico (${destination}).`,
+        `/dashboard/admin/caso/${user.uid}`
+      );
 
       await refreshApplication();
-      setSuccessMsg(
-        destination === "JAPAN"
-          ? "¡Perfil guardado! Con estos datos y tu Bóveda armaremos tu Solicitud Oficial de Visado Japonés y tu Programa de Estancia."
-          : "¡Perfil guardado! Con estos datos y tu Bóveda nuestro equipo legal diligenciará tu formulario DS-160 oficial."
-      );
+      setSavedSuccess(true);
     } catch {
-      setErrorMsg("No se pudieron guardar los datos. Intenta nuevamente.");
+      setError("No se pudieron guardar los cambios. Verifica tu conexión.");
     } finally {
       setSaving(false);
     }
@@ -142,8 +191,8 @@ export default function FormularioPage() {
   return (
     <DashboardLayout>
       <div className="max-w-4xl mx-auto space-y-6 font-sans">
-{/* Encabezado Ejecutivo: Destino bloqueado para clientes, conmutador solo para Admin en pruebas */}
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 rounded-2xl bg-brand-charcoal p-7 sm:p-8 text-brand-white shadow-lg">
+        {/* Cabecera */}
+        <div className="rounded-2xl bg-brand-charcoal p-7 sm:p-8 text-brand-white shadow-lg flex flex-col md:flex-row md:items-center md:justify-between gap-6">
           <div className="space-y-2">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-red/20 px-3 py-1 text-xs font-semibold text-brand-red">
               <Sparkles className="h-3.5 w-3.5" />
@@ -158,135 +207,150 @@ export default function FormularioPage() {
             </h2>
             <p className="text-xs sm:text-sm text-white/70 max-w-xl leading-relaxed">
               Nosotros extraemos los datos técnicos directamente de tu{" "}
-              <strong className="text-white font-semibold">Pasaporte y Carta Laboral</strong> en la Bóveda. Aquí solo dinos lo que no aparece en tus certificados.
+              <strong className="text-white">Pasaporte y Carta Laboral</strong>{" "}
+              en la Bóveda. Aquí solo dinos lo que no aparece en tus certificados.
             </p>
           </div>
 
-          {profile?.role === "admin" ? (
-            <div className="rounded-xl bg-white/[0.06] p-3 border border-white/10 shrink-0 space-y-2">
-              <p className="text-[10px] uppercase tracking-widest text-white/50 text-center font-bold">
-                Test Admin: Cambiar Destino
+          {isStaff && (
+            <div className="rounded-xl bg-white/[0.06] p-3 border border-white/10 shrink-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-white/50 mb-2 text-center">
+                Vista Admin
               </p>
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => handleDestinationSwitch("USA")}
+                  onClick={() => setDestination("USA")}
                   className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
                     destination === "USA"
                       ? "bg-brand-red text-white shadow-sm"
-                      : "bg-white/5 text-white/60 hover:text-white"
+                      : "text-white/65 hover:bg-white/10"
                   }`}
                 >
                   🇺🇸 EE. UU.
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleDestinationSwitch("JAPAN")}
+                  onClick={() => setDestination("JAPAN")}
                   className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
                     destination === "JAPAN"
                       ? "bg-brand-red text-white shadow-sm"
-                      : "bg-white/5 text-white/60 hover:text-white"
+                      : "text-white/65 hover:bg-white/10"
                   }`}
                 >
                   🇯🇵 Japón
                 </button>
               </div>
             </div>
-          ) : (
-            <div className="rounded-xl bg-white/[0.06] px-5 py-4 border border-white/10 shrink-0 text-center">
-              <p className="text-[10px] uppercase tracking-widest text-white/50 font-bold">
-                Jurisdicción Contratada
-              </p>
-              <p className="font-display text-base font-bold text-white mt-1">
-                {destination === "JAPAN" ? "🇯🇵 Japón" : "🇺🇸 Estados Unidos"}
-              </p>
-            </div>
           )}
         </div>
 
-        {/* Nota de extracción documental */}
-        <div className="rounded-2xl bg-brand-white p-4 sm:p-5 border border-brand-charcoal/10 flex items-center gap-3.5 shadow-2xs">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
-            <FileCheck2 className="h-5 w-5" />
-          </div>
-          <div className="text-xs">
-            <p className="font-semibold text-brand-charcoal">
-              Cero transcripción de documentos
-            </p>
-            <p className="text-brand-charcoal/60 mt-0.5">
-              No necesitas digitar tu número de pasaporte, fechas de emisión ni la dirección o teléfono de tu empresa; los tomamos de tu Bóveda.
-            </p>
-          </div>
-        </div>
-
-        {successMsg && (
-          <div className="flex items-center gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>{successMsg}</span>
+        {/* BANNER DE BLOQUEO AUTOMÁTICO CUANDO EL CASO ESTÁ EN AUDITORÍA LEGAL O LISTO CONSULADO */}
+        {isFormLockedForClient && (
+          <div className="rounded-2xl bg-amber-500/10 border border-amber-500/35 p-5 flex items-start gap-3.5">
+            <Lock className="h-5 w-5 text-amber-700 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-xs font-bold uppercase tracking-wider text-amber-950">
+                Cuestionario Protegido en Fase de Radicación Oficial
+              </p>
+              <p className="text-xs text-amber-900/85 leading-relaxed">
+                Tu expediente ya se encuentra en etapa de <strong>Auditoría Legal / Consulado</strong> y tu especialista está diligenciando tus formularios oficiales con esta información. Por seguridad, la edición está bloqueada; si necesitas corregir algún dato, indícaselo a tu asesor para que habilite la edición temporalmente.
+              </p>
+            </div>
           </div>
         )}
-        {errorMsg && (
-          <div className="flex items-center gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>{errorMsg}</span>
+
+        {savedSuccess && (
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs sm:text-sm font-medium text-emerald-700">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="h-5 w-5 shrink-0" />
+              <span>
+                ¡Cuestionario guardado y notificado a tu especialista legal!
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSavedSuccess(false)}
+              className="p-1 text-emerald-700/60 hover:text-emerald-900"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs sm:text-sm font-medium text-brand-red">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="h-5 w-5 shrink-0" />
+              <span>{error}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setError("")}
+              className="p-1 text-brand-red/60 hover:text-brand-red"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         )}
 
         <form onSubmit={handleSave} className="space-y-6">
-          {/* SECCIÓN 1: Identidad y Domicilio Actual */}
-          <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-5">
-            <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
-              <UserCheck className="h-5 w-5 text-brand-red" />
-              <div>
-                <h3 className="font-display text-base font-bold text-brand-charcoal">
-                  1. Datos Personales y de Contacto
-                </h3>
-                <p className="text-xs text-brand-charcoal/55">
-                  Información básica de contacto y residencia actual en Colombia.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-              <div className="space-y-1.5 sm:col-span-2">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Nombre Completo (Como en el pasaporte)
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.fullName}
-                  onChange={(e) => handleChange("fullName", e.target.value)}
-                  placeholder="Ej. Luz Daniela Rangel Díaz"
-                  className={inputBaseClass}
-                />
+          <fieldset disabled={isFormLockedForClient} className="space-y-6">
+            {/* BLOQUE 1: CONTACTO Y DOMICILIO */}
+            <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-5">
+              <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
+                <User className="h-5 w-5 text-brand-red" />
+                <div>
+                  <h3 className="font-display text-base font-bold text-brand-charcoal">
+                    1. Datos de Contacto y Domicilio Actual
+                  </h3>
+                  <p className="text-xs text-brand-charcoal/55">
+                    El número de pasaporte y fechas de vencimiento los tomamos de tu PDF en la Bóveda.
+                  </p>
+                </div>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  No. de Cédula / ID Nacional
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.nationalId}
-                  onChange={(e) => handleChange("nationalId", e.target.value)}
-                  placeholder="Ej. 1193470292"
-                  className={inputBaseClass}
-                />
-              </div>
-            </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-brand-charcoal">
+                    Nombre Completo (Como aparece en tu pasaporte)
+                  </label>
+                  <input
+                    type="text"
+                    name="fullName"
+                    required
+                    value={formData.fullName}
+                    onChange={handleChange}
+                    className={inputClass}
+                  />
+                </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Estado Civil
-                </label>
-                <div className="relative">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-brand-charcoal">
+                    No. de Cédula / Documento de Identidad Nacional
+                  </label>
+                  <input
+                    type="text"
+                    name="nationalId"
+                    required
+                    value={formData.nationalId}
+                    onChange={handleChange}
+                    placeholder="Ej. 1.020.304.050"
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-brand-charcoal">
+                    Estado Civil
+                  </label>
                   <select
+                    name="maritalStatus"
                     value={formData.maritalStatus}
-                    onChange={(e) => handleChange("maritalStatus", e.target.value)}
-                    className={selectBaseClass}
+                    onChange={handleChange}
+                    className={inputClass}
                   >
                     <option value="Soltero/a">Soltero/a</option>
                     <option value="Casado/a">Casado/a</option>
@@ -294,208 +358,65 @@ export default function FormularioPage() {
                     <option value="Divorciado/a">Divorciado/a</option>
                     <option value="Viudo/a">Viudo/a</option>
                   </select>
-                  <ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-brand-charcoal/50" />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-brand-charcoal">
+                    Teléfono Móvil (WhatsApp)
+                  </label>
+                  <input
+                    type="tel"
+                    name="mobilePhone"
+                    required
+                    value={formData.mobilePhone}
+                    onChange={handleChange}
+                    placeholder="Ej. +57 300 123 4567"
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-brand-charcoal">
+                    Ciudad y Departamento
+                  </label>
+                  <input
+                    type="text"
+                    name="cityAndState"
+                    required
+                    value={formData.cityAndState}
+                    onChange={handleChange}
+                    placeholder="Ej. Bogotá, Cundinamarca"
+                    className={inputClass}
+                  />
                 </div>
               </div>
 
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-brand-charcoal">
-                  Teléfono Móvil (WhatsApp)
+                  Dirección Completa de Residencia (Con barrio o edificio)
                 </label>
                 <input
                   type="text"
+                  name="homeAddress"
                   required
-                  value={formData.mobilePhone}
-                  onChange={(e) => handleChange("mobilePhone", e.target.value)}
-                  placeholder="Ej. 300 695 9343"
-                  className={inputBaseClass}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Ciudad y Departamento
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.cityAndState}
-                  onChange={(e) => handleChange("cityAndState", e.target.value)}
-                  placeholder="Ej. Barranquilla, Atlántico"
-                  className={inputBaseClass}
+                  value={formData.homeAddress}
+                  onChange={handleChange}
+                  placeholder="Ej. Calle 93 # 15-20 Apto 501"
+                  className={inputClass}
                 />
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-brand-charcoal">
-                Dirección de Domicilio Actual
-              </label>
-              <input
-                type="text"
-                required
-                value={formData.homeAddress}
-                onChange={(e) => handleChange("homeAddress", e.target.value)}
-                placeholder="Ej. Calle 86 No. 47-38, Barrio Alto Prado"
-                className={inputBaseClass}
-              />
-            </div>
-          </div>
-
-          {/* SECCIÓN 2: Plan de Viaje y Solvencia */}
-          <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-5">
-            <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
-              <Plane className="h-5 w-5 text-brand-red" />
-              <div>
-                <h3 className="font-display text-base font-bold text-brand-charcoal">
-                  2. Logística de Viaje y Perfil Económico
-                </h3>
-                <p className="text-xs text-brand-charcoal/55">
-                  Fechas tentativas y actividad económica que respalda tu solicitud.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Fecha Probable de Entrada
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={formData.estimatedArrivalDate}
-                  onChange={(e) => handleChange("estimatedArrivalDate", e.target.value)}
-                  className={inputBaseClass}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Días Previstos de Estancia
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.stayDurationDays}
-                  onChange={(e) => handleChange("stayDurationDays", e.target.value)}
-                  placeholder="Ej. 13 días"
-                  className={inputBaseClass}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  ¿Quién costea el viaje?
-                </label>
-                <div className="relative">
-                  <select
-                    value={formData.tripFinancier}
-                    onChange={(e) => handleChange("tripFinancier", e.target.value)}
-                    className={selectBaseClass}
-                  >
-                    <option value="Yo mismo (Recursos propios)">Yo mismo (Recursos propios)</option>
-                    <option value="Un familiar / Pareja (Con Carta de Garantía)">Un familiar / Pareja (Garante)</option>
-                    <option value="Empresa patrocinadora">Empresa patrocinadora</option>
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-brand-charcoal/50" />
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Ocupación o Cargo Actual
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.currentOccupation}
-                  onChange={(e) => handleChange("currentOccupation", e.target.value)}
-                  placeholder="Ej. Asesora Comercial / Ingeniero"
-                  className={inputBaseClass}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Empresa o Negocio Actual
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.companyOrEmployerName}
-                  onChange={(e) => handleChange("companyOrEmployerName", e.target.value)}
-                  placeholder="Ej. Banco Serfinanza / Tecnoglass"
-                  className={inputBaseClass}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Ingreso Mensual Aproximado
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.monthlyIncomeLocal}
-                  onChange={(e) => handleChange("monthlyIncomeLocal", e.target.value)}
-                  placeholder="Ej. $6.500.000 COP"
-                  className={inputBaseClass}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* SECCIÓN 3 CONDICIONAL: JAPÓN vs ESTADOS UNIDOS */}
-          {destination === "JAPAN" ? (
+            {/* BLOQUE 2: OCUPACIÓN Y PERFIL FINANCIERO */}
             <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-5">
               <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
                 <Briefcase className="h-5 w-5 text-brand-red" />
                 <div>
                   <h3 className="font-display text-base font-bold text-brand-charcoal">
-                    3. Requisitos Específicos — Embajada del Japón
+                    2. Resumen Laboral y Solvencia
                   </h3>
                   <p className="text-xs text-brand-charcoal/55">
-                    Con estos datos redactaremos tu Solicitud de Visado y tu Programa de Estancia{" "}
-                    <span className="italic">(Schedule of Stay)</span> día por día.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
-                    Ocupación de tu Pareja o Padres *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.partnerOrParentsOccupation || ""}
-                    onChange={(e) => handleChange("partnerOrParentsOccupation", e.target.value)}
-                    placeholder="Ej. IT Helpdesk Supervisor / Independiente / No aplica"
-                    className={inputBaseClass}
-                  />
-                  <p className="text-[11px] text-brand-charcoal/50">
-                    * Requerido en la página 2 del formato oficial japonés (de tus padres si eres menor/estudiante).
-                  </p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
-                    Ciudades que deseas visitar en Japón
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.japanCitiesToVisit || ""}
-                    onChange={(e) => handleChange("japanCitiesToVisit", e.target.value)}
-                    placeholder="Ej. Tokio, Kioto y Osaka"
-                    className={inputBaseClass}
-                  />
-                  <p className="text-[11px] text-brand-charcoal/50">
-                    Nosotros armamos el itinerario diario detallado de hoteles y actividades por ti.
+                    Información clave para estructurar tu perfil de arraigo ante el cónsul.
                   </p>
                 </div>
               </div>
@@ -503,191 +424,334 @@ export default function FormularioPage() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-brand-charcoal">
-                    Aeropuerto de Entrada Previsto
+                    Ocupación o Cargo Actual
                   </label>
                   <input
                     type="text"
-                    value={formData.japanPortOfEntry || ""}
-                    onChange={(e) => handleChange("japanPortOfEntry", e.target.value)}
-                    placeholder="Ej. Narita, Tokio (NRT)"
-                    className={inputBaseClass}
+                    name="currentOccupation"
+                    required
+                    value={formData.currentOccupation}
+                    onChange={handleChange}
+                    placeholder="Ej. Ingeniero / Empresario"
+                    className={inputClass}
                   />
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-brand-charcoal">
-                    Aerolínea Proyectada (Opcional)
+                    Nombre de Empresa o Negocio
                   </label>
                   <input
                     type="text"
-                    value={formData.japanAirlineOrFlight || ""}
-                    onChange={(e) => handleChange("japanAirlineOrFlight", e.target.value)}
-                    placeholder="Ej. ANA / United / China Eastern"
-                    className={inputBaseClass}
+                    name="companyOrEmployerName"
+                    required
+                    value={formData.companyOrEmployerName}
+                    onChange={handleChange}
+                    placeholder="Ej. Bancolombia / Independiente"
+                    className={inputClass}
                   />
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-brand-charcoal">
-                    Visitas Anteriores a Japón
+                    Ingreso Mensual Aproximado
                   </label>
                   <input
                     type="text"
-                    value={formData.previousStayInJapan || ""}
-                    onChange={(e) => handleChange("previousStayInJapan", e.target.value)}
-                    placeholder="Ej. Ninguna"
-                    className={inputBaseClass}
+                    name="monthlyIncomeLocal"
+                    required
+                    value={formData.monthlyIncomeLocal}
+                    onChange={handleChange}
+                    placeholder="Ej. $6,500,000 COP"
+                    className={inputClass}
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-brand-charcoal">
-                    ¿Cuentas con Garante o Invitante en Japón?
+                    Fecha Probable de Viaje
                   </label>
-                  <div className="relative">
-                    <select
-                      value={formData.hasGuarantorInJapan || "no"}
-                      onChange={(e) => handleChange("hasGuarantorInJapan", e.target.value)}
-                      className={selectBaseClass}
-                    >
-                      <option value="no">No, voy 100% por turismo independiente (Hotel)</option>
-                      <option value="yes">Sí, me invita un familiar o residente en Japón</option>
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-brand-charcoal/50" />
+                  <input
+                    type="date"
+                    name="estimatedArrivalDate"
+                    required
+                    value={formData.estimatedArrivalDate}
+                    onChange={handleChange}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-brand-charcoal">
+                    Días Estimados de Estancia
+                  </label>
+                  <input
+                    type="text"
+                    name="stayDurationDays"
+                    required
+                    value={formData.stayDurationDays}
+                    onChange={handleChange}
+                    placeholder="Ej. 15 días"
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-brand-charcoal">
+                    ¿Quién costea tu viaje?
+                  </label>
+                  <select
+                    name="tripFinancier"
+                    value={formData.tripFinancier}
+                    onChange={handleChange}
+                    className={inputClass}
+                  >
+                    <option value="Yo mismo (Recursos propios)">
+                      Yo mismo (Recursos propios)
+                    </option>
+                    <option value="Un familiar / Pareja (Con Carta de Garantía)">
+                      Un familiar / Pareja (Patrocinador)
+                    </option>
+                    <option value="Empresa patrocinadora">
+                      Empresa patrocinadora
+                    </option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* BLOQUE 3 CONDICIONAL: JAPÓN vs EE. UU. */}
+            {destination === "JAPAN" ? (
+              <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-5">
+                <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
+                  <Plane className="h-5 w-5 text-brand-red" />
+                  <div>
+                    <h3 className="font-display text-base font-bold text-brand-charcoal">
+                      3. Datos Exclusivos para Embajada del Japón (Programa de Estancia)
+                    </h3>
                   </div>
                 </div>
 
-                {formData.hasGuarantorInJapan === "yes" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                   <div className="space-y-1.5">
                     <label className="block text-xs font-semibold text-brand-charcoal">
-                      Datos de quien te invita en Japón
+                      Ocupación de tu Cónyuge o de tus Padres
                     </label>
                     <input
                       type="text"
-                      value={formData.guarantorDetails || ""}
-                      onChange={(e) => handleChange("guarantorDetails", e.target.value)}
-                      placeholder="Nombre completo, parentesco y teléfono en Japón"
-                      className={inputBaseClass}
+                      name="partnerOrParentsOccupation"
+                      required
+                      value={formData.partnerOrParentsOccupation || ""}
+                      onChange={handleChange}
+                      placeholder="Ej. Madre: Docente / Padre: Pensionado"
+                      className={inputClass}
                     />
                   </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-5">
-              <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
-                <Briefcase className="h-5 w-5 text-brand-red" />
-                <div>
-                  <h3 className="font-display text-base font-bold text-brand-charcoal">
-                    3. Datos Clave para DS-160 — Estados Unidos
-                  </h3>
-                  <p className="text-xs text-brand-charcoal/55">
-                    Información que exige el Departamento de Estado y no aparece en tus certificados.
-                  </p>
-                </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
-                    Nombres y Fecha de Nacimiento de tus Padres
-                  </label>
-                  <textarea
-                    rows={2}
-                    required
-                    value={formData.parentsFullNamesAndDob || ""}
-                    onChange={(e) => handleChange("parentsFullNamesAndDob", e.target.value)}
-                    placeholder="Ej. Padre: Jairo Rubio (30/09/1942) | Madre: Emperatriz Rodríguez (09/09/1959)"
-                    className={textareaBaseClass}
-                  />
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      Ciudades que te gustaría visitar en Japón
+                    </label>
+                    <input
+                      type="text"
+                      name="japanCitiesToVisit"
+                      required
+                      value={formData.japanCitiesToVisit || ""}
+                      onChange={handleChange}
+                      placeholder="Ej. Tokio, Kioto, Osaka y Hiroshima"
+                      className={inputClass}
+                    />
+                  </div>
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      Aeropuerto de Entrada Deseado
+                    </label>
+                    <input
+                      type="text"
+                      name="japanPortOfEntry"
+                      value={formData.japanPortOfEntry || ""}
+                      onChange={handleChange}
+                      placeholder="Ej. Narita o Haneda (Tokio)"
+                      className={inputClass}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      ¿Has visitado Japón anteriormente?
+                    </label>
+                    <input
+                      type="text"
+                      name="previousStayInJapan"
+                      value={formData.previousStayInJapan || ""}
+                      onChange={handleChange}
+                      placeholder="No / Sí (indicar año)"
+                      className={inputClass}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3 pt-2 border-t border-brand-platinum">
                   <label className="block text-xs font-semibold text-brand-charcoal">
-                    Redes Sociales Públicas (@usuario)
+                    ¿Tienes algún amigo, familiar o garante en Japón que te invite?
                   </label>
-                  <textarea
-                    rows={2}
-                    required
-                    value={formData.socialMediaHandles || ""}
-                    onChange={(e) => handleChange("socialMediaHandles", e.target.value)}
-                    placeholder="Ej. Instagram: @usuario | LinkedIn: Nombre Apellido"
-                    className={textareaBaseClass}
-                  />
+                  <select
+                    name="hasGuarantorInJapan"
+                    value={formData.hasGuarantorInJapan || "no"}
+                    onChange={handleChange}
+                    className={inputClass}
+                  >
+                    <option value="no">
+                      No, viajo 100% por turismo independiente (Hotel)
+                    </option>
+                    <option value="yes">
+                      Sí, cuento con un invitante o garante en Japón
+                    </option>
+                  </select>
+
+                  {formData.hasGuarantorInJapan === "yes" && (
+                    <textarea
+                      name="guarantorDetails"
+                      rows={2}
+                      value={formData.guarantorDetails || ""}
+                      onChange={handleChange}
+                      placeholder="Nombre completo de la persona en Japón, parentesco/relación, dirección y teléfono..."
+                      className={textareaClass}
+                    />
+                  )}
                 </div>
               </div>
+            ) : (
+              <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-5">
+                <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
+                  <ShieldAlert className="h-5 w-5 text-brand-red" />
+                  <div>
+                    <h3 className="font-display text-base font-bold text-brand-charcoal">
+                      3. Preguntas Clave para el Formulario Oficial DS-160 (EE. UU.)
+                    </h3>
+                  </div>
+                </div>
 
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Resumen de Empleos Anteriores (Últimos 5 años) y Universidad
-                </label>
-                <textarea
-                  rows={2}
-                  value={formData.previousJobsAndEducationSummary || ""}
-                  onChange={(e) => handleChange("previousJobsAndEducationSummary", e.target.value)}
-                  placeholder="Ej. 2022-2024: Hidrotest del Caribe | Univ. Autónoma del Caribe (O sube tu Hoja de Vida en la Bóveda)"
-                  className={textareaBaseClass}
-                />
-              </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      Nombres Completos y Fecha de Nacimiento de tus Padres
+                    </label>
+                    <input
+                      type="text"
+                      name="parentsFullNamesAndDob"
+                      required
+                      value={formData.parentsFullNamesAndDob || ""}
+                      onChange={handleChange}
+                      placeholder="Ej. Padre: Juan Pérez (12/05/1960), Madre: Ana Gómez (08/11/1964)"
+                      className={inputClass}
+                    />
+                  </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
-                    ¿Tienes familiares directos en Estados Unidos?
-                  </label>
-                  <div className="relative">
-                    <select
-                      value={formData.hasRelativesInUS || "no"}
-                      onChange={(e) => handleChange("hasRelativesInUS", e.target.value)}
-                      className={selectBaseClass}
-                    >
-                      <option value="no">No tengo familiares en EE. UU.</option>
-                      <option value="yes">Sí tengo familiares en EE. UU.</option>
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-brand-charcoal/50" />
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      Usuarios de tus Redes Sociales Públicas (Instagram, LinkedIn, etc.)
+                    </label>
+                    <input
+                      type="text"
+                      name="socialMediaHandles"
+                      required
+                      value={formData.socialMediaHandles || ""}
+                      onChange={handleChange}
+                      placeholder="Ej. IG: @juanperez, LinkedIn: juan-perez"
+                      className={inputClass}
+                    />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-brand-charcoal">
-                    ¿Te han negado la visa de EE. UU. anteriormente?
+                    Resumen Rápido: Trabajos Anteriores (Últimos 5 años) y Universidad/Colegio
                   </label>
-                  <div className="relative">
+                  <textarea
+                    name="previousJobsAndEducationSummary"
+                    rows={3}
+                    value={formData.previousJobsAndEducationSummary || ""}
+                    onChange={handleChange}
+                    placeholder="Ej. 2020-2023: Analista en Empresa X. Universidad: Administración en Univ. de los Andes (2015-2020). (O indica si subiste tu Hoja de Vida a la Bóveda)."
+                    className={textareaClass}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-2 border-t border-brand-platinum">
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      ¿Tienes familiares directos viviendo en Estados Unidos?
+                    </label>
                     <select
-                      value={formData.hasPreviousVisaRefusal || "no"}
-                      onChange={(e) => handleChange("hasPreviousVisaRefusal", e.target.value)}
-                      className={selectBaseClass}
+                      name="hasRelativesInUS"
+                      value={formData.hasRelativesInUS || "no"}
+                      onChange={handleChange}
+                      className={inputClass}
                     >
-                      <option value="no">No, nunca me la han negado</option>
+                      <option value="no">No</option>
+                      <option value="yes">Sí</option>
+                    </select>
+                    {formData.hasRelativesInUS === "yes" && (
+                      <input
+                        type="text"
+                        name="relativesInUSDetails"
+                        value={formData.relativesInUSDetails || ""}
+                        onChange={handleChange}
+                        placeholder="Nombre, parentesco y estatus en EE. UU."
+                        className={inputClass}
+                      />
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-brand-charcoal">
+                      ¿Alguna vez te han negado o cancelado una Visa de EE. UU.?
+                    </label>
+                    <select
+                      name="hasPreviousVisaRefusal"
+                      value={formData.hasPreviousVisaRefusal || "no"}
+                      onChange={handleChange}
+                      className={inputClass}
+                    >
+                      <option value="no">No, nunca</option>
                       <option value="yes">Sí, tuve un rechazo previo</option>
                     </select>
-                    <ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-brand-charcoal/50" />
+                    {formData.hasPreviousVisaRefusal === "yes" && (
+                      <input
+                        type="text"
+                        name="refusalExplanation"
+                        value={formData.refusalExplanation || ""}
+                        onChange={handleChange}
+                        placeholder="¿En qué año fue y qué te indicó el cónsul?"
+                        className={inputClass}
+                      />
+                    )}
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Barra Inferior de Envío */}
-          <div className="rounded-2xl bg-brand-white p-6 border border-brand-charcoal/10 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2.5 text-xs text-brand-charcoal/65">
-              <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0" />
-              <span>
-                Encriptación PII activa. Tus respuestas solo son visibles para tu especialista legal asignado.
-              </span>
-            </div>
-
-            <button
-              type="submit"
-              disabled={saving}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-8 py-3.5 text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/20 hover:bg-brand-red/90 disabled:opacity-50 transition-all shrink-0"
-            >
-              <Save className="h-4 w-4" />
-              <span>{saving ? "Guardando en expediente..." : "Guardar y Enviar a mi Asesor"}</span>
-            </button>
-          </div>
+            {!isFormLockedForClient && (
+              <div className="flex items-center justify-end">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-red px-8 py-3.5 text-xs font-semibold text-brand-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all disabled:opacity-50"
+                >
+                  <Save className="h-4 w-4" />
+                  <span>
+                    {saving ? "Guardando datos..." : "Guardar Cuestionario"}
+                  </span>
+                </button>
+              </div>
+            )}
+          </fieldset>
         </form>
       </div>
     </DashboardLayout>

@@ -2,7 +2,9 @@
 import { doc, setDoc } from "firebase/firestore";
 import { db } from "./config";
 import {
+  AppNotification,
   ApplicationStatus,
+  AuditLogEntry,
   DestinationCountry,
   PlanTier,
   UserProfile,
@@ -12,11 +14,52 @@ import {
 
 export function formatDisplayName(name?: string | null): string {
   if (!name) return "";
-  // Si viene pegado tipo "LuisGaray", inserta el espacio automáticamente -> "Luis Garay"
   return name
     .replace(/([a-zñáéíóú])([A-ZÑÁÉÍÓÚ])/g, "$1 $2")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// Generador de entradas para el Registro de Auditoría Inmutable (Audit Trail)
+export function buildAuditLogEntry(
+  action: string,
+  details: string,
+  actorName: string,
+  actorRole: UserRole = "client"
+): AuditLogEntry {
+  return {
+    id: `audit_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    action,
+    details,
+    actorName: formatDisplayName(actorName) || "Usuario",
+    actorRole,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+// Disparador de Notificaciones Internas en Tiempo Real (Campana del Header)
+export async function sendInternalNotification(
+  recipientId: string,
+  title: string,
+  message: string,
+  link?: string
+): Promise<void> {
+  if (!recipientId) return;
+  try {
+    const id = `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const payload: AppNotification = {
+      id,
+      recipientId,
+      title,
+      message,
+      ...(link ? { link } : {}),
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+    await setDoc(doc(db, "notifications", id), payload);
+  } catch {
+    // Fallo silencioso si aún no están habilitadas las reglas de notifications
+  }
 }
 
 export type StepSemaphore = "completed" | "in_progress" | "missing";
@@ -40,7 +83,6 @@ export function calculateApplicationMetrics(app?: VisaApplication | null): {
     };
   }
 
-  // Si ya fue dictaminada como Aprobada o Rechazada (o Purgada tras cierre), es 100%
   if (app.status === "approved" || app.status === "rejected") {
     return {
       progressPercentage: 100,
@@ -52,7 +94,6 @@ export function calculateApplicationMetrics(app?: VisaApplication | null): {
     };
   }
 
-  // 1. Evaluar Cuestionario Estratégico
   const fd = app.formData;
   const hasAnyForm = Boolean(
     fd && (fd.nationalId || fd.mobilePhone || fd.homeAddress || fd.currentOccupation)
@@ -73,7 +114,6 @@ export function calculateApplicationMetrics(app?: VisaApplication | null): {
     ? "in_progress"
     : "missing";
 
-  // 2. Evaluar Bóveda de Documentos
   const docsCount = app.documents ? Object.keys(app.documents).length : 0;
   const requiredMin = app.destination === "JAPAN" ? 4 : 3;
   let vaultSemaphore: StepSemaphore =
@@ -83,9 +123,11 @@ export function calculateApplicationMetrics(app?: VisaApplication | null): {
       ? "in_progress"
       : "missing";
 
-  // 3. Evaluar Sala Consular & Meetings
   const meetingsCount = app.meetings ? app.meetings.length : 0;
-  const hasDeliverable = Boolean(app.consularSession?.officialDeliverableUrl);
+  const hasDeliverable = Boolean(
+    (app.officialDeliverables && app.officialDeliverables.length > 0) ||
+      app.consularSession?.officialDeliverableUrl
+  );
   const isSessionBooked = app.consularSession?.status === "confirmed";
 
   let consularSemaphore: StepSemaphore =
@@ -95,7 +137,6 @@ export function calculateApplicationMetrics(app?: VisaApplication | null): {
       ? "in_progress"
       : "missing";
 
-  // Cálculo basado en acciones del cliente
   let progress = 20;
   let step = 1;
   let autoStatus: ApplicationStatus = "onboarding_pending";
@@ -125,7 +166,6 @@ export function calculateApplicationMetrics(app?: VisaApplication | null): {
     autoStatus = "ready_for_consulate";
   }
 
-  // Si el Admin o Asesor adelantó manualmente la etapa en el Pipeline, sincronizamos el piso de progreso y los semáforos
   if (app.status === "documents_pending") {
     progress = Math.max(progress, 50);
     step = Math.max(step, 2);
@@ -171,17 +211,24 @@ export async function initializeUserAndApplication(
   const profile: UserProfile = {
     uid,
     email: email.toLowerCase(),
-    fullName,
+    fullName: formatDisplayName(fullName),
     role,
     destination,
     planTier,
     createdAt: now,
   };
 
+  const initialAudit = buildAuditLogEntry(
+    "Provisionamiento de Expediente",
+    `Cuenta activada e inicializada para trámite de ${destination} (Plan ${planTier}).`,
+    fullName,
+    role
+  );
+
   const application: VisaApplication = {
     id: uid,
     userId: uid,
-    clientName: fullName,
+    clientName: formatDisplayName(fullName),
     clientEmail: email.toLowerCase(),
     destination,
     planTier,
@@ -193,7 +240,8 @@ export async function initializeUserAndApplication(
     currentStep: 1,
     progressPercentage: 20,
     assignedAdvisorId,
-    assignedAdvisorName,
+    assignedAdvisorName: formatDisplayName(assignedAdvisorName),
+    auditLogs: [initialAudit],
     updatedAt: now,
   };
 

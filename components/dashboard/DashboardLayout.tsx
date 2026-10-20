@@ -24,9 +24,21 @@ import {
   X,
   PanelLeftClose,
   PanelLeftOpen,
+  Bell,
+  CheckCheck,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { calculateApplicationMetrics, formatDisplayName } from "@/lib/firebase/db";
+import { db } from "@/lib/firebase/config";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  updateDoc,
+  where,
+} from "firebase/firestore";
+import { AppNotification } from "@/types/visa";
 
 const clientNavigation = [
   { name: "Resumen del Trámite", href: "/dashboard", icon: LayoutDashboard },
@@ -135,12 +147,66 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
 
-  // Cerrar el menú móvil automáticamente al cambiar de ruta
+  // Estado del Centro de Notificaciones Internas
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+
   useEffect(() => {
     setMobileMenuOpen(false);
+    setNotifOpen(false);
   }, [pathname]);
 
   const isStaff = profile?.role === "admin" || profile?.role === "advisor";
+
+  // Suscripción en tiempo real a las notificaciones del usuario (y del canal STAFF si es Admin/Asesor)
+  useEffect(() => {
+    if (!user) return;
+    const targets = isStaff ? [user.uid, "STAFF"] : [user.uid];
+    const q = query(
+      collection(db, "notifications"),
+      where("recipientId", "in", targets)
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: AppNotification[] = [];
+        snap.forEach((d) => list.push(d.data() as AppNotification));
+        list.sort((a, b) =>
+          (b.createdAt || "").localeCompare(a.createdAt || "")
+        );
+        setNotifications(list.slice(0, 20));
+      },
+      () => {}
+    );
+
+    return () => unsub();
+  }, [user, isStaff]);
+
+  const unreadCount = notifications.filter((n) => !n.read).length;
+
+  const handleMarkNotificationRead = async (notif: AppNotification) => {
+    try {
+      if (!notif.read) {
+        await updateDoc(doc(db, "notifications", notif.id), { read: true });
+      }
+      setNotifOpen(false);
+      if (notif.link) {
+        router.push(notif.link);
+      }
+    } catch {}
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      const unread = notifications.filter((n) => !n.read);
+      await Promise.all(
+        unread.map((n) =>
+          updateDoc(doc(db, "notifications", n.id), { read: true })
+        )
+      );
+    } catch {}
+  };
 
   const handleToggleClientSimulation = () => {
     const nextState = !simulateClientView;
@@ -179,7 +245,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
   const renderSidebarContent = (onNavigate?: () => void) => (
     <>
       <div className="space-y-6 overflow-y-auto pr-1">
-        {/* Logo + Botón de cierre */}
         <div className="flex items-center justify-between">
           <Link
             href={
@@ -207,7 +272,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
             </div>
           </Link>
 
-          {/* Cerrar en Móvil */}
           {onNavigate && (
             <button
               type="button"
@@ -220,7 +284,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
           )}
         </div>
 
-        {/* Tarjeta de Rol Operativo o Plan Contratado */}
         <div className="rounded-2xl bg-white/[0.04] p-4 border border-white/10 space-y-1.5">
           <div className="flex items-center justify-between text-[11px] font-medium text-white/50">
             <span>{!showClientMenu ? "Rol Operativo" : "Plan Contratado"}</span>
@@ -252,7 +315,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        {/* Menú Dinámico */}
         {!showClientMenu ? (
           <div className="space-y-1.5">
             <p className="px-3 text-[10px] font-bold uppercase tracking-widest text-white/35">
@@ -301,7 +363,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         )}
       </div>
 
-      {/* Parte Inferior Fija */}
       <div className="pt-4 border-t border-white/10 space-y-2.5 shrink-0">
         {isStaff && (
           <div
@@ -392,7 +453,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-brand-platinum/50 flex font-sans">
-      {/* Sidebar Colapsable en PC (Desktop) */}
       <aside
         className={`hidden lg:flex h-screen sticky top-0 flex-col justify-between bg-brand-charcoal text-brand-white shrink-0 select-none transition-all duration-300 ease-in-out overflow-hidden ${
           desktopSidebarOpen
@@ -405,7 +465,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      {/* Cajón Lateral Deslizable en Móvil / Tablet */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
@@ -418,11 +477,9 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {/* Contenido Principal */}
       <main className="flex-1 flex flex-col min-w-0">
         <header className="sticky top-0 z-40 bg-brand-white/95 backdrop-blur-md border-b border-brand-platinum px-4 sm:px-6 lg:px-10 py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            {/* Botón Hamburguesa para Móvil (< 1024px) */}
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
@@ -432,7 +489,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
               <Menu className="h-5 w-5" />
             </button>
 
-            {/* Botón para Colapsar / Expandir Sidebar en PC (>= 1024px) */}
             <button
               type="button"
               onClick={() => setDesktopSidebarOpen((prev) => !prev)}
@@ -487,8 +543,8 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
             </div>
           </div>
 
-          {showClientMenu && (
-            <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-3 shrink-0">
+            {showClientMenu && (
               <div className="hidden sm:flex items-center gap-2 rounded-full bg-brand-platinum/80 border border-brand-charcoal/5 px-4 py-1.5 text-xs font-semibold text-brand-charcoal">
                 <Clock className="h-3.5 w-3.5 text-brand-red" />
                 <span>
@@ -496,8 +552,84 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
                   {liveMetrics.progressPercentage}%)
                 </span>
               </div>
+            )}
+
+            {/* CENTRO DE NOTIFICACIONES INTERNAS (CAMPANA CON POPOVER) */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setNotifOpen((prev) => !prev)}
+                className="relative inline-flex items-center justify-center rounded-xl bg-brand-platinum/80 hover:bg-brand-charcoal text-brand-charcoal hover:text-white p-2.5 border border-brand-charcoal/10 transition-all"
+                aria-label="Centro de Notificaciones"
+              >
+                <Bell className="h-4 w-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-brand-red px-1 text-[10px] font-bold text-white shadow-xs">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {notifOpen && (
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-brand-white border border-brand-charcoal/15 shadow-2xl z-50 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3 bg-brand-charcoal text-white">
+                    <span className="font-display text-xs font-bold uppercase tracking-wider">
+                      Notificaciones ({unreadCount} nuevas)
+                    </span>
+                    {unreadCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleMarkAllRead}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-red hover:underline"
+                      >
+                        <CheckCheck className="h-3.5 w-3.5" />
+                        <span>Marcar leídas</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="max-h-80 overflow-y-auto divide-y divide-brand-platinum">
+                    {notifications.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-brand-charcoal/50">
+                        No tienes notificaciones pendientes.
+                      </div>
+                    ) : (
+                      notifications.map((n) => (
+                        <button
+                          key={n.id}
+                          type="button"
+                          onClick={() => handleMarkNotificationRead(n)}
+                          className={`w-full text-left p-4 hover:bg-brand-platinum/50 transition-colors flex items-start gap-3 ${
+                            !n.read ? "bg-brand-red/[0.03]" : ""
+                          }`}
+                        >
+                          <span
+                            className={`mt-1.5 h-2 w-2 rounded-full shrink-0 ${
+                              !n.read ? "bg-brand-red" : "bg-brand-charcoal/20"
+                            }`}
+                          />
+                          <div className="space-y-1 min-w-0 flex-1">
+                            <p className="text-xs font-bold text-brand-charcoal truncate">
+                              {n.title}
+                            </p>
+                            <p className="text-[11px] text-brand-charcoal/70 leading-relaxed">
+                              {n.message}
+                            </p>
+                            <p className="text-[10px] text-brand-charcoal/40">
+                              {new Date(n.createdAt).toLocaleString("es-CO", {
+                                dateStyle: "short",
+                                timeStyle: "short",
+                              })}
+                            </p>
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </header>
 
         <div className="flex-1 p-4 sm:p-6 lg:p-10 max-w-6xl w-full mx-auto">

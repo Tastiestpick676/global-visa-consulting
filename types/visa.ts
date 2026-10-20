@@ -84,10 +84,9 @@ export interface VaultDocument {
   fileSize: number;
   uploadedAt: string;
   status: "uploaded" | "verified" | "rejected";
-  advisorFeedback?: string;
+  advisorFeedback?: string; // Motivo exacto de observación/rechazo escrito por el asesor
 }
 
-// Documentos oficiales subidos por Admin/Asesor al perfil del cliente (DS-160, Confirmación Cita, Schedule of Stay, etc.)
 export interface OfficialDeliverableItem {
   id: string;
   title: string;
@@ -134,6 +133,27 @@ export interface CaseMeetingRecord {
   createdAt: string;
 }
 
+// 3. Registro de Auditoría Inmutable (Audit Trail por Expediente)
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  details: string;
+  actorName: string;
+  actorRole: UserRole;
+  timestamp: string;
+}
+
+// 2. Centro de Notificaciones Internas en Tiempo Real
+export interface AppNotification {
+  id: string;
+  recipientId: string; // UID del usuario específico o "STAFF" para asesores/admins
+  title: string;
+  message: string;
+  link?: string;
+  read: boolean;
+  createdAt: string;
+}
+
 export interface ConsularSessionData {
   preferredDate?: string;
   preferredTimeSlot?: string;
@@ -174,10 +194,12 @@ export interface VisaApplication {
   assignedAdvisorName?: string;
   assignedAdvisorEmail?: string;
   assignedAdvisorBookingUrl?: string;
+  formUnlockedByAdvisor?: boolean; // Permite al asesor desbloquear temporalmente el formulario en etapas avanzadas
   isDecommissioned?: boolean;
   decommissionedAt?: string;
   officialDeliverables?: OfficialDeliverableItem[];
   meetings?: CaseMeetingRecord[];
+  auditLogs?: AuditLogEntry[];
   historicalCases?: HistoricalCaseSummary[];
   formData?: Partial<SmartIntakeData>;
   documents?: Record<string, VaultDocument>;

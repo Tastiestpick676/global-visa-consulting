@@ -4,6 +4,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
+import { DocumentPreviewModal } from "@/components/dashboard/DocumentPreviewModal";
 import { useAuth } from "@/context/AuthContext";
 import { db, storage } from "@/lib/firebase/config";
 import {
@@ -29,8 +30,10 @@ import {
   VisaApplication,
 } from "@/types/visa";
 import {
+  buildAuditLogEntry,
   calculateApplicationMetrics,
   formatDisplayName,
+  sendInternalNotification,
 } from "@/lib/firebase/db";
 import {
   ArrowLeft,
@@ -56,6 +59,10 @@ import {
   ShieldAlert,
   ArrowRightCircle,
   X,
+  Eye,
+  Lock,
+  Unlock,
+  History,
 } from "lucide-react";
 
 const inputBaseClass =
@@ -119,10 +126,22 @@ function CaseWorkspaceContent() {
   const [appData, setAppData] = useState<VisaApplication | null>(null);
   const [staffList, setStaffList] = useState<UserProfile[]>([]);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<
-    "cuestionario" | "boveda" | "entregables" | "meetings"
+    "cuestionario" | "boveda" | "entregables" | "meetings" | "auditoria"
   >("cuestionario");
   const [loading, setLoading] = useState(true);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // 1. Visor de Documentos Integrado
+  const [previewDoc, setPreviewDoc] = useState<{
+    title: string;
+    fileName?: string;
+    fileUrl: string;
+  } | null>(null);
+
+  // 5. Modal para escribir motivo exacto al Observar/Rechazar un documento
+  const [rejectingDocItem, setRejectingDocItem] =
+    useState<VaultDocument | null>(null);
+  const [rejectReasonText, setRejectReasonText] = useState("");
 
   const [transitionPrompt, setTransitionPrompt] =
     useState<StageTransitionPrompt | null>(null);
@@ -149,13 +168,11 @@ function CaseWorkspaceContent() {
 
   const isStaff = profile?.role === "admin" || profile?.role === "advisor";
 
-  // 1. Limpiar alertas al cambiar de pestaña dentro del Workspace
   useEffect(() => {
     setFeedback("");
     setErrorMsg("");
   }, [activeWorkspaceTab]);
 
-  // 2. Auto-ocultar las alertas después de 5 segundos
   useEffect(() => {
     if (!feedback && !errorMsg) return;
     const timer = setTimeout(() => {
@@ -203,6 +220,38 @@ function CaseWorkspaceContent() {
     navigator.clipboard.writeText(val);
     setCopiedField(label);
     setTimeout(() => setCopiedField(null), 1800);
+  };
+
+  // 4. Alternar Bloqueo / Desbloqueo del Cuestionario del Cliente
+  const handleToggleFormLock = async () => {
+    if (!appData) return;
+    const nextUnlocked = !appData.formUnlockedByAdvisor;
+    try {
+      const audit = buildAuditLogEntry(
+        nextUnlocked
+          ? "Cuestionario Desbloqueado Temporalmente"
+          : "Cuestionario Protegido (Modo Lectura)",
+        `El especialista ${
+          nextUnlocked ? "habilitó" : "bloqueó"
+        } la edición del Cuestionario Estratégico para el cliente.`,
+        profile?.fullName || "Asesor",
+        profile?.role || "advisor"
+      );
+
+      await updateDoc(doc(db, "applications", appData.id), {
+        formUnlockedByAdvisor: nextUnlocked,
+        auditLogs: [audit, ...(appData.auditLogs || [])],
+        updatedAt: new Date().toISOString(),
+      });
+
+      setFeedback(
+        nextUnlocked
+          ? "Edición de Cuestionario habilitada para el cliente."
+          : "Cuestionario bloqueado nuevamente en modo seguro."
+      );
+    } catch {
+      setErrorMsg("No se pudo cambiar el candado del cuestionario.");
+    }
   };
 
   const evaluateStageTransition = (targetStatus: ApplicationStatus) => {
@@ -320,13 +369,28 @@ function CaseWorkspaceContent() {
     const simulatedApp: VisaApplication = { ...appData, status: newStatus };
     const metrics = calculateApplicationMetrics(simulatedApp);
 
+    const audit = buildAuditLogEntry(
+      `Cambio de Etapa: ${newStatus.toUpperCase()}`,
+      `El estado del expediente pasó de "${appData.status}" a "${newStatus}" (${metrics.progressPercentage}%).`,
+      profile?.fullName || "Especialista Legal",
+      profile?.role || "advisor"
+    );
+
     try {
       await updateDoc(doc(db, "applications", appData.id), {
         status: newStatus,
         progressPercentage: metrics.progressPercentage,
         currentStep: metrics.currentStep,
+        auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
+
+      await sendInternalNotification(
+        appData.id,
+        "Actualización en el estado de tu trámite",
+        `Tu expediente ha avanzado a la etapa: ${newStatus.toUpperCase()} (${metrics.progressPercentage}%).`,
+        "/dashboard"
+      );
 
       setFeedback(
         `Etapa actualizada a "${newStatus.toUpperCase()}". Sincronizado en tiempo real con el portal del cliente (${metrics.progressPercentage}%).`
@@ -341,13 +405,33 @@ function CaseWorkspaceContent() {
     const chosen = staffList.find((s) => s.uid === newAdvisorUid);
     const cleanName = chosen ? formatDisplayName(chosen.fullName) : "";
     try {
+      const audit = buildAuditLogEntry(
+        "Asignación de Especialista Legal",
+        chosen
+          ? `Expediente asignado a ${cleanName}.`
+          : "Expediente devuelto a la Bolsa de Casos.",
+        profile?.fullName || "Admin",
+        profile?.role || "admin"
+      );
+
       await updateDoc(doc(db, "applications", appData.id), {
         assignedAdvisorId: chosen ? chosen.uid : "",
         assignedAdvisorName: cleanName,
         assignedAdvisorEmail: chosen ? chosen.email : "",
         assignedAdvisorBookingUrl: chosen?.bookingUrl || "",
+        auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
+
+      if (chosen) {
+        await sendInternalNotification(
+          appData.id,
+          `Especialista Asignado: ${cleanName}`,
+          `${cleanName} ha tomado tu expediente. Ya puedes agendar tu sesión 1-a-1 en la Sala Consular.`,
+          "/dashboard/sala-entrenamiento"
+        );
+      }
+
       setFeedback(
         chosen
           ? `Caso asignado a ${cleanName}.`
@@ -360,17 +444,32 @@ function CaseWorkspaceContent() {
 
   const handleVerifyDocument = async (
     docId: string,
-    newDocStatus: "verified" | "rejected"
+    newDocStatus: "verified" | "rejected",
+    feedbackReason: string = ""
   ) => {
     if (!appData || !appData.documents?.[docId]) return;
     try {
+      const targetDoc = appData.documents[docId];
       const updatedDocs: Record<string, VaultDocument> = {
         ...appData.documents,
         [docId]: {
-          ...appData.documents[docId],
+          ...targetDoc,
           status: newDocStatus,
+          advisorFeedback:
+            newDocStatus === "rejected" ? feedbackReason.trim() : "",
         },
       };
+
+      const audit = buildAuditLogEntry(
+        newDocStatus === "verified"
+          ? `Documento Verificado: ${targetDoc.title}`
+          : `Documento Observado: ${targetDoc.title}`,
+        newDocStatus === "verified"
+          ? `Archivo "${targetDoc.fileName}" aprobado en auditoría.`
+          : `Archivo "${targetDoc.fileName}" observado. Motivo: ${feedbackReason}`,
+        profile?.fullName || "Especialista Legal",
+        profile?.role || "advisor"
+      );
 
       const nextApp = { ...appData, documents: updatedDocs };
       const metrics = calculateApplicationMetrics(nextApp);
@@ -379,13 +478,27 @@ function CaseWorkspaceContent() {
         documents: updatedDocs,
         progressPercentage: metrics.progressPercentage,
         currentStep: metrics.currentStep,
+        auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
 
+      await sendInternalNotification(
+        appData.id,
+        newDocStatus === "verified"
+          ? `✓ Documento verificado: ${targetDoc.title}`
+          : `⚠️ Documento requiere ajuste: ${targetDoc.title}`,
+        newDocStatus === "verified"
+          ? `Tu especialista legal aprobó "${targetDoc.title}".`
+          : `Motivo de observación: "${feedbackReason}". Ingresa a tu Bóveda para reemplazarlo.`,
+        "/dashboard/boveda"
+      );
+
+      setRejectingDocItem(null);
+      setRejectReasonText("");
       setFeedback(
         `Documento marcado como ${
           newDocStatus === "verified" ? "VERIFICADO" : "OBSERVADO"
-        }.`
+        } y notificado al cliente.`
       );
     } catch {
       setErrorMsg("No se pudo actualizar el estado del documento.");
@@ -421,6 +534,13 @@ function CaseWorkspaceContent() {
 
       const updatedList = [newDeliv, ...(appData.officialDeliverables || [])];
 
+      const audit = buildAuditLogEntry(
+        `Entregable Oficial Emitido: ${newDeliv.category}`,
+        `Se publicó "${newDeliv.title}" (${delivFile.name}) en el perfil del cliente.`,
+        profile?.fullName || "Especialista Legal",
+        profile?.role || "advisor"
+      );
+
       await updateDoc(doc(db, "applications", appData.id), {
         officialDeliverables: updatedList,
         consularSession: {
@@ -428,13 +548,21 @@ function CaseWorkspaceContent() {
           officialDeliverableTitle: newDeliv.title,
           officialDeliverableUrl: newDeliv.fileUrl,
         },
+        auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
+
+      await sendInternalNotification(
+        appData.id,
+        `📄 Nuevo Documento Oficial: ${newDeliv.title}`,
+        `Tu especialista ha subido "${newDeliv.title}" a tu perfil listo para consultar o descargar.`,
+        "/dashboard/perfil"
+      );
 
       setDelivTitle("");
       setDelivFile(null);
       setFeedback(
-        `¡Documento "${newDeliv.title}" subido al perfil del cliente!`
+        `¡Documento "${newDeliv.title}" subido y notificado al cliente!`
       );
     } catch {
       setErrorMsg("No se pudo subir el documento oficial a Firebase Storage.");
@@ -507,17 +635,32 @@ function CaseWorkspaceContent() {
       };
       const metrics = calculateApplicationMetrics(nextApp);
 
+      const audit = buildAuditLogEntry(
+        `Meeting Registrado: ${newMeeting.title}`,
+        `Sesión del ${newMeeting.date} registrada en bitácora.`,
+        profile?.fullName || "Especialista Legal",
+        profile?.role || "advisor"
+      );
+
       await updateDoc(doc(db, "applications", appData.id), {
         meetings: updatedMeetings,
         progressPercentage: metrics.progressPercentage,
         currentStep: metrics.currentStep,
+        auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
+
+      await sendInternalNotification(
+        appData.id,
+        `📅 Resumen de Sesión: ${newMeeting.title}`,
+        `Tu asesor ha registrado las notas y acuerdos de tu sesión en la Sala Consular.`,
+        "/dashboard/sala-entrenamiento"
+      );
 
       setMeetingTitle("");
       setMeetingNotes("");
       setMeetingFile(null);
-      setFeedback("¡Meeting registrado con éxito!");
+      setFeedback("¡Meeting registrado y notificado al cliente!");
     } catch {
       setErrorMsg("No se pudo registrar el meeting.");
     } finally {
@@ -587,6 +730,13 @@ function CaseWorkspaceContent() {
       const preservedName =
         appData.formData?.fullName || appData.clientName || "Cliente Archivado";
 
+      const audit = buildAuditLogEntry(
+        "Decomisionamiento y Purga PII (FinOps)",
+        "Archivos de Storage y campos sensibles purgados tras conclusión del trámite.",
+        profile?.fullName || "Admin",
+        "admin"
+      );
+
       await updateDoc(doc(db, "applications", appData.id), {
         clientName: preservedName,
         formData: deleteField(),
@@ -594,6 +744,7 @@ function CaseWorkspaceContent() {
         officialDeliverables: deleteField(),
         isDecommissioned: true,
         decommissionedAt: new Date().toISOString(),
+        auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
 
@@ -635,11 +786,90 @@ function CaseWorkspaceContent() {
   const docsArray = appData.documents ? Object.values(appData.documents) : [];
   const deliverablesArray = appData.officialDeliverables || [];
   const meetingsArray = appData.meetings || [];
+  const auditLogsArray = appData.auditLogs || [];
   const isCaseClosed =
     appData.status === "approved" || appData.status === "rejected";
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 font-sans">
+      {/* 1. VISOR DE DOCUMENTOS INTEGRADO (IN-APP PREVIEW MODAL) */}
+      <DocumentPreviewModal
+        isOpen={Boolean(previewDoc)}
+        onClose={() => setPreviewDoc(null)}
+        title={previewDoc?.title || ""}
+        fileName={previewDoc?.fileName}
+        fileUrl={previewDoc?.fileUrl || ""}
+      />
+
+      {/* 5. MODAL PARA ESCRIBIR EL MOTIVO DE OBSERVACIÓN / RECHAZO DE UN DOCUMENTO */}
+      {rejectingDocItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-3xl bg-brand-white p-7 border border-brand-charcoal/10 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red/10 text-brand-red">
+                  <AlertCircle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-display text-base font-bold text-brand-charcoal">
+                    Indicar Motivo de Observación
+                  </h3>
+                  <p className="text-[11px] text-brand-charcoal/55">
+                    {rejectingDocItem.title}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRejectingDocItem(null)}
+                className="text-brand-charcoal/40 hover:text-brand-charcoal"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-brand-charcoal">
+                ¿Qué debe corregir el cliente en este archivo? *
+              </label>
+              <textarea
+                rows={3}
+                required
+                value={rejectReasonText}
+                onChange={(e) => setRejectReasonText(e.target.value)}
+                placeholder="Ej. La imagen del pasaporte salió cortada en la parte inferior. Por favor súbelo completo y sin reflejos de luz."
+                className="w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 p-3.5 text-xs sm:text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-brand-platinum">
+              <button
+                type="button"
+                onClick={() => setRejectingDocItem(null)}
+                className="rounded-full px-4 py-2 text-xs font-semibold text-brand-charcoal/70 hover:bg-brand-platinum"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={!rejectReasonText.trim()}
+                onClick={() =>
+                  handleVerifyDocument(
+                    rejectingDocItem.docId,
+                    "rejected",
+                    rejectReasonText
+                  )
+                }
+                className="inline-flex items-center gap-1.5 rounded-full bg-brand-red px-5 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-brand-red/90 disabled:opacity-50"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                <span>Notificar Observación al Cliente</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL UNIFICADO DE VALIDACIÓN Y DOBLE CONFIRMACIÓN */}
       {transitionPrompt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
@@ -1047,33 +1277,39 @@ function CaseWorkspaceContent() {
           </div>
         )}
 
-      {/* Selector de 4 Pestañas del Workspace */}
+      {/* Selector de 5 Pestañas del Workspace (Incluye Audit Trail Inmutable) */}
       <div className="flex flex-wrap items-center gap-2 border-b border-brand-charcoal/10 pb-3">
         {[
           {
             id: "cuestionario",
-            label: "1. Cuestionario Estratégico",
+            label: "1. Cuestionario",
             icon: FileText,
             semaforo: autoMetrics.formSemaphore,
           },
           {
             id: "boveda",
-            label: `2. Bóveda del Cliente (${docsArray.length})`,
+            label: `2. Bóveda (${docsArray.length})`,
             icon: FolderLock,
             semaforo: autoMetrics.vaultSemaphore,
           },
           {
             id: "entregables",
-            label: `3. Subir DS-160 / Confirmaciones al Perfil (${deliverablesArray.length})`,
+            label: `3. Subir DS-160 / Confirmaciones (${deliverablesArray.length})`,
             icon: FileCheck2,
             semaforo:
               deliverablesArray.length > 0 ? "completed" : "in_progress",
           },
           {
             id: "meetings",
-            label: `4. Bitácora de Meetings (${meetingsArray.length})`,
+            label: `4. Meetings (${meetingsArray.length})`,
             icon: Calendar,
             semaforo: autoMetrics.consularSemaphore,
+          },
+          {
+            id: "auditoria",
+            label: `5. Auditoría Inmutable (${auditLogsArray.length})`,
+            icon: History,
+            semaforo: "completed" as const,
           },
         ].map((tab) => {
           const Icon = tab.icon;
@@ -1089,7 +1325,7 @@ function CaseWorkspaceContent() {
               key={tab.id}
               type="button"
               onClick={() => setActiveWorkspaceTab(tab.id as any)}
-              className={`inline-flex items-center gap-2.5 rounded-full px-5 py-2.5 text-xs font-bold transition-all ${
+              className={`inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-xs font-bold transition-all ${
                 active
                   ? "bg-brand-charcoal text-white shadow-sm"
                   : "bg-brand-white text-brand-charcoal/70 border border-brand-charcoal/10 hover:bg-brand-platinum"
@@ -1103,18 +1339,46 @@ function CaseWorkspaceContent() {
         })}
       </div>
 
-      {/* TAB 1: RESPUESTAS DEL CUESTIONARIO ESTRATÉGICO */}
+      {/* TAB 1: RESPUESTAS DEL CUESTIONARIO ESTRATÉGICO + INTERRUPTOR DE CANDADO */}
       {activeWorkspaceTab === "cuestionario" && (
         <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-6">
-          <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-brand-platinum pb-4">
             <div>
               <h3 className="font-display text-lg font-bold text-brand-charcoal">
                 Información Diligenciada por el Cliente (En Vivo)
               </h3>
               <p className="text-xs text-brand-charcoal/55">
-                Cualquier cambio que el cliente guarde en su formulario se refleja aquí automáticamente. Haz clic en una tarjeta para copiar su contenido.
+                Haz clic en cualquier tarjeta para copiar su texto al portapapeles.
               </p>
             </div>
+
+            {/* 4. Control para Bloquear / Desbloquear la Edición del Cuestionario cuando está en Etapa >= 3 */}
+            {(appData.status === "in_legal_review" ||
+              appData.status === "ready_for_consulate" ||
+              appData.status === "approved" ||
+              appData.status === "rejected") && (
+              <button
+                type="button"
+                onClick={handleToggleFormLock}
+                className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition-all shrink-0 ${
+                  appData.formUnlockedByAdvisor
+                    ? "bg-amber-500/15 text-amber-800 border border-amber-500/35"
+                    : "bg-brand-charcoal text-white hover:bg-brand-red"
+                }`}
+              >
+                {appData.formUnlockedByAdvisor ? (
+                  <>
+                    <Unlock className="h-3.5 w-3.5" />
+                    <span>Edición Desbloqueada (Volver a Bloquear)</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="h-3.5 w-3.5" />
+                    <span>Cuestionario Protegido (Permitir Edición)</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
 
           {!appData.formData ? (
@@ -1219,7 +1483,7 @@ function CaseWorkspaceContent() {
         </div>
       )}
 
-      {/* TAB 2: BÓVEDA DE DOCUMENTOS */}
+      {/* TAB 2: BÓVEDA DE DOCUMENTOS CON VISOR INTEGRADO Y FEEDBACK DE OBSERVACIÓN */}
       {activeWorkspaceTab === "boveda" && (
         <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-6">
           <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
@@ -1228,7 +1492,7 @@ function CaseWorkspaceContent() {
                 Soportes Cargados por el Cliente ({docsArray.length})
               </h3>
               <p className="text-xs text-brand-charcoal/55">
-                Revisa los PDFs del cliente para extraer datos de pasaporte y carta laboral, y márcalos como Verificados.
+                Haz clic en &ldquo;Vista Previa&rdquo; para abrir el visor integrado sin salir de la página.
               </p>
             </div>
           </div>
@@ -1245,66 +1509,81 @@ function CaseWorkspaceContent() {
               {docsArray.map((docItem) => (
                 <div
                   key={docItem.docId}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl bg-brand-platinum/30 p-5 border border-brand-platinum"
+                  className="rounded-2xl bg-brand-platinum/30 p-5 border border-brand-platinum space-y-3"
                 >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-brand-charcoal">
-                        {docItem.title}
-                      </p>
-                      <span
-                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase ${
-                          docItem.status === "verified"
-                            ? "bg-emerald-500/15 text-emerald-700"
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-bold text-brand-charcoal">
+                          {docItem.title}
+                        </p>
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase ${
+                            docItem.status === "verified"
+                              ? "bg-emerald-500/15 text-emerald-700"
+                              : docItem.status === "rejected"
+                              ? "bg-brand-red/15 text-brand-red"
+                              : "bg-amber-500/15 text-amber-800"
+                          }`}
+                        >
+                          {docItem.status === "verified"
+                            ? "Verificado"
                             : docItem.status === "rejected"
-                            ? "bg-brand-red/15 text-brand-red"
-                            : "bg-amber-500/15 text-amber-800"
-                        }`}
-                      >
-                        {docItem.status === "verified"
-                          ? "Verificado"
-                          : docItem.status === "rejected"
-                          ? "Observado"
-                          : "En Revisión"}
-                      </span>
+                            ? "Observado"
+                            : "En Revisión"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-brand-charcoal/60">
+                        Archivo: <strong>{docItem.fileName}</strong> •{" "}
+                        {(docItem.fileSize / 1024 / 1024).toFixed(2)} MB
+                      </p>
                     </div>
-                    <p className="text-xs text-brand-charcoal/60">
-                      Archivo: <strong>{docItem.fileName}</strong> •{" "}
-                      {(docItem.fileSize / 1024 / 1024).toFixed(2)} MB
-                    </p>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewDoc({
+                            title: docItem.title,
+                            fileName: docItem.fileName,
+                            fileUrl: docItem.fileUrl,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-full bg-brand-charcoal px-4 py-2 text-xs font-semibold text-white hover:bg-brand-red transition-colors"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        <span>Vista Previa</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleVerifyDocument(docItem.docId, "verified")
+                        }
+                        className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3.5 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-500/25 transition-colors"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        <span>Verificar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRejectingDocItem(docItem);
+                          setRejectReasonText(docItem.advisorFeedback || "");
+                        }}
+                        className="inline-flex items-center gap-1 rounded-full bg-brand-red/10 border border-brand-red/25 px-3.5 py-2 text-xs font-bold text-brand-red hover:bg-brand-red/20 transition-colors"
+                      >
+                        <XCircle className="h-3.5 w-3.5" />
+                        <span>Observar con Motivo</span>
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    <a
-                      href={docItem.fileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 rounded-full bg-brand-charcoal px-4 py-2 text-xs font-semibold text-white hover:bg-brand-red transition-colors"
-                    >
-                      <span>Abrir Archivo</span>
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleVerifyDocument(docItem.docId, "verified")
-                      }
-                      className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3.5 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-500/25 transition-colors"
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      <span>Verificar</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleVerifyDocument(docItem.docId, "rejected")
-                      }
-                      className="inline-flex items-center gap-1 rounded-full bg-brand-red/10 border border-brand-red/25 px-3.5 py-2 text-xs font-bold text-brand-red hover:bg-brand-red/20 transition-colors"
-                    >
-                      <XCircle className="h-3.5 w-3.5" />
-                      <span>Observar</span>
-                    </button>
-                  </div>
+                  {docItem.status === "rejected" && docItem.advisorFeedback && (
+                    <div className="rounded-xl bg-brand-red/10 border border-brand-red/25 p-3 text-xs text-brand-red">
+                      <strong>Motivo enviado al cliente:</strong>{" "}
+                      {docItem.advisorFeedback}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1326,7 +1605,7 @@ function CaseWorkspaceContent() {
                   Subir Documentos Oficiales al Perfil del Cliente (DS-160, Confirmaciones, Itinerarios)
                 </h3>
                 <p className="text-xs text-brand-charcoal/55">
-                  Los archivos que cargues aquí aparecerán automáticamente en el widget de <strong>&ldquo;Documentos y Archivos de tu Proceso&rdquo;</strong> dentro del Perfil y la Sala Consular del cliente.
+                  Los archivos que cargues aquí aparecerán automáticamente en el Perfil del cliente y le enviarán una notificación interna.
                 </p>
               </div>
             </div>
@@ -1367,7 +1646,7 @@ function CaseWorkspaceContent() {
                   type="text"
                   value={delivTitle}
                   onChange={(e) => setDelivTitle(e.target.value)}
-                  placeholder="Ej. Confirmación DS-160 Lista para Imprimir — Luz Rangel"
+                  placeholder="Ej. Confirmación DS-160 Lista para Imprimir"
                   className={inputBaseClass}
                 />
               </div>
@@ -1436,15 +1715,20 @@ function CaseWorkspaceContent() {
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      <a
-                        href={item.fileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewDoc({
+                            title: item.title,
+                            fileName: item.fileName,
+                            fileUrl: item.fileUrl,
+                          })
+                        }
                         className="inline-flex items-center gap-1.5 rounded-full bg-brand-charcoal px-4 py-2 text-xs font-semibold text-white hover:bg-brand-red transition-colors"
                       >
-                        <span>Ver / Descargar</span>
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
+                        <Eye className="h-3.5 w-3.5" />
+                        <span>Vista Previa</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleDeleteOfficialDeliverable(item)}
@@ -1601,19 +1885,23 @@ function CaseWorkspaceContent() {
 
                     {mtg.attachmentUrl && (
                       <div className="pt-1">
-                        <a
-                          href={mtg.attachmentUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPreviewDoc({
+                              title: mtg.title,
+                              fileName: mtg.attachmentName,
+                              fileUrl: mtg.attachmentUrl || "",
+                            })
+                          }
                           className="inline-flex items-center gap-2 rounded-full bg-brand-red/10 px-4 py-1.5 text-xs font-bold text-brand-red hover:bg-brand-red hover:text-white transition-all"
                         >
-                          <Paperclip className="h-3.5 w-3.5" />
+                          <Eye className="h-3.5 w-3.5" />
                           <span>
-                            Ver Attachment:{" "}
+                            Previsualizar Attachment:{" "}
                             {mtg.attachmentName || "Documento Adjunto"}
                           </span>
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
+                        </button>
                       </div>
                     )}
                   </div>
@@ -1621,6 +1909,75 @@ function CaseWorkspaceContent() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* 3. TAB 5: REGISTRO DE AUDITORÍA INMUTABLE (AUDIT TRAIL POR EXPEDIENTE) */}
+      {activeWorkspaceTab === "auditoria" && (
+        <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-5">
+          <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
+            <div className="flex items-center gap-2.5">
+              <History className="h-5 w-5 text-brand-red" />
+              <div>
+                <h3 className="font-display text-lg font-bold text-brand-charcoal">
+                  Registro de Auditoría Inmutable (Audit Trail)
+                </h3>
+                <p className="text-xs text-brand-charcoal/55">
+                  Trazabilidad cronológica de cada modificación, carga documental y cambio de estado en este expediente.
+                </p>
+              </div>
+            </div>
+            <span className="rounded-full bg-brand-charcoal px-3 py-1 text-[10px] font-bold uppercase text-white">
+              Solo Lectura • Inmutable
+            </span>
+          </div>
+
+          {auditLogsArray.length === 0 ? (
+            <p className="text-xs text-brand-charcoal/50 py-6 text-center">
+              Aún no hay eventos registrados en la bitácora de auditoría.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {auditLogsArray.map((log) => (
+                <div
+                  key={log.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl bg-brand-platinum/35 p-4 border border-brand-platinum text-xs"
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
+                          log.actorRole === "admin"
+                            ? "bg-brand-charcoal text-white"
+                            : log.actorRole === "advisor"
+                            ? "bg-brand-red text-white"
+                            : "bg-emerald-500/15 text-emerald-800"
+                        }`}
+                      >
+                        {log.actorRole}
+                      </span>
+                      <span className="font-bold text-brand-charcoal">
+                        {log.action}
+                      </span>
+                    </div>
+                    <p className="text-brand-charcoal/70">{log.details}</p>
+                  </div>
+
+                  <div className="text-right shrink-0 text-[11px] text-brand-charcoal/55">
+                    <p className="font-semibold text-brand-charcoal">
+                      {log.actorName}
+                    </p>
+                    <p>
+                      {new Date(log.timestamp).toLocaleString("es-CO", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
