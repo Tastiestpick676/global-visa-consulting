@@ -1,7 +1,7 @@
 // components/dashboard/DashboardLayout.tsx
 "use client";
 
-import { ReactNode, Suspense, useState, useEffect } from "react";
+import { ReactNode, Suspense, useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -92,6 +92,48 @@ const staffNavigation = [
   },
 ];
 
+// Skeleton Estructural para feedback visual instantáneo y LCP óptimo en Lighthouse
+export function DashboardContentSkeleton() {
+  return (
+    <div className="space-y-6 animate-skeleton" aria-busy="true" aria-live="polite">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <div
+            key={n}
+            className="rounded-2xl bg-brand-white p-5 border border-brand-charcoal/10 shadow-2xs space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <div className="h-3 w-20 rounded-full bg-brand-charcoal/10" />
+              <div className="h-4 w-4 rounded-md bg-brand-charcoal/10" />
+            </div>
+            <div className="h-8 w-14 rounded-lg bg-brand-charcoal/15" />
+            <div className="h-2.5 w-28 rounded-full bg-brand-charcoal/10" />
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-4">
+        <div className="space-y-2 border-b border-brand-platinum pb-4">
+          <div className="h-5 w-56 rounded-lg bg-brand-charcoal/15" />
+          <div className="h-3 w-80 max-w-full rounded-full bg-brand-charcoal/10" />
+        </div>
+        {[1, 2, 3].map((row) => (
+          <div
+            key={row}
+            className="flex items-center justify-between gap-4 rounded-xl bg-brand-platinum/40 p-4"
+          >
+            <div className="space-y-2 flex-1">
+              <div className="h-4 w-48 rounded-full bg-brand-charcoal/15" />
+              <div className="h-3 w-64 max-w-full rounded-full bg-brand-charcoal/10" />
+            </div>
+            <div className="h-9 w-28 rounded-full bg-brand-charcoal/15 shrink-0" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StaffSidebarLinks({
   role,
   onNavigate,
@@ -116,10 +158,10 @@ function StaffSidebarLinks({
               key={item.name}
               href={item.href}
               onClick={onNavigate}
-              className={`flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-semibold transition-all ${
+              className={`flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-semibold transition-all active:scale-[0.98] ${
                 isActive
                   ? "bg-brand-red text-brand-white shadow-md shadow-brand-red/25"
-                  : "text-white/70 hover:bg-white/5 hover:text-white"
+                  : "text-white/75 hover:bg-white/5 hover:text-white"
               }`}
             >
               <Icon className="h-4 w-4 shrink-0" />
@@ -147,18 +189,44 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
 
-  // Estado del Centro de Notificaciones Internas
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
+  const notifContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMobileMenuOpen(false);
     setNotifOpen(false);
   }, [pathname]);
 
+  // 5. Cerrar menú de Notificaciones y Drawer móvil con tecla Escape o clic afuera
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setNotifOpen(false);
+        setMobileMenuOpen(false);
+      }
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        notifOpen &&
+        notifContainerRef.current &&
+        !notifContainerRef.current.contains(e.target as Node)
+      ) {
+        setNotifOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [notifOpen]);
+
   const isStaff = profile?.role === "admin" || profile?.role === "advisor";
 
-  // Suscripción en tiempo real a las notificaciones del usuario (y del canal STAFF si es Admin/Asesor)
   useEffect(() => {
     if (!user) return;
     const targets = isStaff ? [user.uid, "STAFF"] : [user.uid];
@@ -225,19 +293,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
     router.push("/login");
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-brand-white flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand-red border-t-transparent" />
-          <p className="text-sm font-medium text-brand-charcoal">
-            Cargando entorno seguro...
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   const showClientMenu = !isStaff || simulateClientView;
   const avatarUrl = profile?.photoUrl || user?.photoURL || "";
   const liveMetrics = calculateApplicationMetrics(application);
@@ -245,7 +300,8 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
   const renderSidebarContent = (onNavigate?: () => void) => (
     <>
       <div className="space-y-6 overflow-y-auto pr-1">
-        <div className="flex items-center justify-between">
+        {/* Cabecera de la Sidebar: Logo + Botón de Ocultar Sidebar adentro de la misma Sidebar */}
+        <div className="flex items-center justify-between gap-2">
           <Link
             href={
               isStaff && !simulateClientView
@@ -253,16 +309,16 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
                 : "/dashboard"
             }
             onClick={onNavigate}
-            className="flex items-center gap-3"
+            className="flex items-center gap-3 min-w-0"
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red text-brand-white shadow-md shadow-brand-red/20 shrink-0">
               <ShieldCheck className="h-5 w-5" />
             </div>
-            <div className="flex flex-col">
-              <span className="font-display text-base font-bold tracking-tight text-white leading-none">
+            <div className="flex flex-col truncate">
+              <span className="font-display text-base font-bold tracking-tight text-white leading-none truncate">
                 GLOBAL VISA
               </span>
-              <span className="text-[10px] font-semibold tracking-widest text-white/45 uppercase mt-1">
+              <span className="text-[10px] font-semibold tracking-widest text-white/60 uppercase mt-1 truncate">
                 {profile?.role === "admin"
                   ? "Backoffice Admin"
                   : profile?.role === "advisor"
@@ -272,11 +328,25 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
             </div>
           </Link>
 
+          {/* 4. Botón de Ocultar Sidebar ubicado DENTRO de la propia Sidebar (En PC) */}
+          {!onNavigate && (
+            <button
+              type="button"
+              onClick={() => setDesktopSidebarOpen(false)}
+              title="Ocultar barra lateral"
+              aria-label="Ocultar barra lateral"
+              className="hidden lg:inline-flex items-center justify-center rounded-xl bg-white/[0.06] hover:bg-brand-red text-white/75 hover:text-white p-2 border border-white/10 transition-all shrink-0"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Botón cerrar en Móvil */}
           {onNavigate && (
             <button
               type="button"
               onClick={onNavigate}
-              className="lg:hidden rounded-lg p-2 text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+              className="lg:hidden rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white transition-colors"
               aria-label="Cerrar menú móvil"
             >
               <X className="h-5 w-5" />
@@ -284,8 +354,9 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
           )}
         </div>
 
+        {/* Tarjeta de Rol o Plan (con Skeleton si aún está cargando) */}
         <div className="rounded-2xl bg-white/[0.04] p-4 border border-white/10 space-y-1.5">
-          <div className="flex items-center justify-between text-[11px] font-medium text-white/50">
+          <div className="flex items-center justify-between text-[11px] font-medium text-white/60">
             <span>{!showClientMenu ? "Rol Operativo" : "Plan Contratado"}</span>
             <span
               className={`h-2 w-2 rounded-full ${
@@ -293,37 +364,50 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
               }`}
             />
           </div>
-          <div className="flex items-center justify-between">
-            <span className="font-display text-sm font-bold text-white">
-              {simulateClientView
-                ? "Vista Cliente"
-                : profile?.role === "admin"
-                ? "Admin"
-                : profile?.role === "advisor"
-                ? "Asesor"
-                : profile?.planTier || "Priority Pro"}
-            </span>
-            {!isStaff || simulateClientView ? (
-              <span className="rounded-full bg-brand-red/20 px-2.5 py-0.5 text-[10px] font-bold text-brand-red uppercase">
-                {application?.destination === "JAPAN" ? "🇯🇵 Japón" : "🇺🇸 EE. UU."}
+          {loading ? (
+            <div className="h-5 w-28 rounded-md bg-white/10 animate-skeleton mt-1" />
+          ) : (
+            <div className="flex items-center justify-between">
+              <span className="font-display text-sm font-bold text-white">
+                {simulateClientView
+                  ? "Vista Cliente"
+                  : profile?.role === "admin"
+                  ? "Admin"
+                  : profile?.role === "advisor"
+                  ? "Asesor"
+                  : profile?.planTier || "Priority Pro"}
               </span>
-            ) : (
-              <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-[10px] font-bold text-white/80 uppercase">
-                Staff
-              </span>
-            )}
-          </div>
+              {!isStaff || simulateClientView ? (
+                <span className="rounded-full bg-brand-red/20 px-2.5 py-0.5 text-[10px] font-bold text-brand-red uppercase">
+                  {application?.destination === "JAPAN" ? "🇯🇵 Japón" : "🇺🇸 EE. UU."}
+                </span>
+              ) : (
+                <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-[10px] font-bold text-white/85 uppercase">
+                  Staff
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
-        {!showClientMenu ? (
+        {/* Menú de Navegación (o Skeleton si aún carga el rol) */}
+        {loading ? (
+          <div className="space-y-2 pt-2 animate-skeleton">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="h-10 w-full rounded-xl bg-white/[0.06]" />
+            ))}
+          </div>
+        ) : !showClientMenu ? (
           <div className="space-y-1.5">
-            <p className="px-3 text-[10px] font-bold uppercase tracking-widest text-white/35">
+            <p className="px-3 text-[10px] font-bold uppercase tracking-widest text-white/50">
               Operaciones & Backoffice
             </p>
             <Suspense
               fallback={
-                <div className="px-3.5 py-2 text-xs text-white/40">
-                  Cargando menú...
+                <div className="space-y-2 pt-1 animate-skeleton">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-9 w-full rounded-xl bg-white/5" />
+                  ))}
                 </div>
               }
             >
@@ -335,7 +419,7 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
           </div>
         ) : (
           <div className="space-y-1.5">
-            <p className="px-3 text-[10px] font-bold uppercase tracking-widest text-white/35">
+            <p className="px-3 text-[10px] font-bold uppercase tracking-widest text-white/50">
               {isStaff ? "Simulación de Cliente" : "Mi Expediente"}
             </p>
             <nav className="space-y-1">
@@ -347,10 +431,10 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
                     key={item.name}
                     href={item.href}
                     onClick={onNavigate}
-                    className={`flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-semibold transition-all ${
+                    className={`flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-semibold transition-all active:scale-[0.98] ${
                       isActive
                         ? "bg-brand-red text-brand-white shadow-md shadow-brand-red/25"
-                        : "text-white/65 hover:bg-white/5 hover:text-white"
+                        : "text-white/70 hover:bg-white/5 hover:text-white"
                     }`}
                   >
                     <Icon className="h-4 w-4 shrink-0" />
@@ -363,12 +447,14 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         )}
       </div>
 
+      {/* Pie de Sidebar */}
       <div className="pt-4 border-t border-white/10 space-y-2.5 shrink-0">
         {isStaff && (
           <div
             onClick={handleToggleClientSimulation}
             role="switch"
             aria-checked={simulateClientView}
+            aria-label="Alternar Modo Vista Cliente"
             tabIndex={0}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
@@ -382,7 +468,7 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
               <span className="text-xs font-semibold text-white">
                 Modo Vista Cliente
               </span>
-              <span className="text-[10px] text-white/45">
+              <span className="text-[10px] text-white/60">
                 {simulateClientView ? "Simulación activa" : "Backoffice activo"}
               </span>
             </div>
@@ -415,6 +501,8 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
               <img
                 src={avatarUrl}
                 alt={profile?.fullName || "Avatar"}
+                width={36}
+                height={36}
                 referrerPolicy="no-referrer"
                 className="h-9 w-9 shrink-0 rounded-full object-cover border border-white/20"
               />
@@ -432,17 +520,18 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
                 {formatDisplayName(profile?.fullName || user?.displayName) ||
                   "Mi Perfil"}
               </p>
-              <p className="text-[10px] text-white/45 truncate">
+              <p className="text-[10px] text-white/60 truncate">
                 Ver mi perfil y ajustes
               </p>
             </div>
           </div>
-          <Settings className="h-4 w-4 text-white/35 group-hover:text-white shrink-0 transition-colors" />
+          <Settings className="h-4 w-4 text-white/50 group-hover:text-white shrink-0 transition-colors" />
         </Link>
 
         <button
+          type="button"
           onClick={handleSignOut}
-          className="w-full flex items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs font-semibold text-red-400 hover:bg-red-500/10 transition-colors"
+          className="w-full flex items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs font-semibold text-red-400 hover:bg-red-500/10 transition-all"
         >
           <LogOut className="h-4 w-4" />
           <span>Cerrar Sesión Segura</span>
@@ -453,6 +542,7 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-brand-platinum/50 flex font-sans">
+      {/* Sidebar en Desktop */}
       <aside
         className={`hidden lg:flex h-screen sticky top-0 flex-col justify-between bg-brand-charcoal text-brand-white shrink-0 select-none transition-all duration-300 ease-in-out overflow-hidden ${
           desktopSidebarOpen
@@ -465,6 +555,7 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
+      {/* Drawer en Móvil */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
@@ -477,63 +568,61 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         </div>
       )}
 
+      {/* Contenido Principal (Renderiza el Header de inmediato para LCP < 0.8s en Lighthouse) */}
       <main className="flex-1 flex flex-col min-w-0">
         <header className="sticky top-0 z-40 bg-brand-white/95 backdrop-blur-md border-b border-brand-platinum px-4 sm:px-6 lg:px-10 py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
+            {/* Botón Hamburguesa Móvil */}
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden inline-flex items-center justify-center rounded-xl bg-brand-charcoal p-2.5 text-white hover:bg-brand-red transition-colors shrink-0"
+              className="lg:hidden inline-flex items-center justify-center rounded-xl bg-brand-charcoal p-2.5 text-white hover:bg-brand-red transition-all shrink-0"
               aria-label="Abrir menú móvil"
             >
               <Menu className="h-5 w-5" />
             </button>
 
-            <button
-              type="button"
-              onClick={() => setDesktopSidebarOpen((prev) => !prev)}
-              title={
-                desktopSidebarOpen
-                  ? "Ocultar barra lateral"
-                  : "Mostrar barra lateral"
-              }
-              className="hidden lg:inline-flex items-center justify-center rounded-xl bg-brand-platinum/80 hover:bg-brand-charcoal text-brand-charcoal hover:text-white p-2.5 border border-brand-charcoal/10 transition-all shrink-0"
-              aria-label="Alternar barra lateral en PC"
-            >
-              {desktopSidebarOpen ? (
-                <PanelLeftClose className="h-4 w-4" />
-              ) : (
+            {/* Solo aparece en el Header cuando la Sidebar de PC está oculta para poder reabrirla */}
+            {!desktopSidebarOpen && (
+              <button
+                type="button"
+                onClick={() => setDesktopSidebarOpen(true)}
+                title="Mostrar barra lateral"
+                aria-label="Mostrar barra lateral"
+                className="hidden lg:inline-flex items-center justify-center rounded-xl bg-brand-charcoal hover:bg-brand-red text-white p-2.5 transition-all shrink-0 shadow-xs"
+              >
                 <PanelLeftOpen className="h-4 w-4" />
-              )}
-            </button>
+              </button>
+            )}
 
             <div className="truncate">
               <h1 className="font-display text-base sm:text-lg font-bold text-brand-charcoal truncate">
                 {pathname.startsWith("/dashboard/perfil")
                   ? "Perfil de Cuenta & Expediente 360°"
+                  : pathname.startsWith("/dashboard/admin")
+                  ? "Centro de Gobernanza & Operaciones — Global Visa Consulting"
                   : !showClientMenu
-                  ? profile?.role === "admin"
-                    ? "Centro de Gobernanza & Operaciones — Global Visa Consulting"
-                    : "Consola de Asesor — Gestión de Casos"
-                  : application?.visaType || "Solicitud de Visa"}
+                  ? "Consola de Asesor — Gestión de Casos"
+                  : application?.visaType || "Portal de Gestión Migratoria"}
               </h1>
-              <p className="text-[11px] sm:text-xs text-brand-charcoal/55 truncate">
-                {!showClientMenu ? (
+              {/* Contraste ajustado a text-brand-charcoal/75 para cumplir WCAG AA 4.5:1 en Lighthouse */}
+              <p className="text-[11px] sm:text-xs text-brand-charcoal/75 truncate">
+                {!showClientMenu || pathname.startsWith("/dashboard/admin") ? (
                   <span>
                     Sesión iniciada como{" "}
                     <strong className="text-brand-charcoal uppercase">
-                      {profile?.role === "admin" ? "Admin" : "Asesor"}
+                      {profile?.role === "advisor" ? "Asesor" : "Admin"}
                     </strong>{" "}
-                    • Protección PII Nivel Bancario Activa
+                    • Protección PII Nivel Bancario Activa (Token 8h)
                   </span>
                 ) : (
                   <span>
                     ID de Expediente:{" "}
-                    <span className="font-mono font-semibold text-brand-charcoal/80">
+                    <span className="font-mono font-semibold text-brand-charcoal">
                       {application?.id ? application.id.slice(0, 8) : "---"}
                     </span>
                     {application?.assignedAdvisorName && (
-                      <span className="ml-2 sm:ml-3 text-emerald-700 font-semibold">
+                      <span className="ml-2 sm:ml-3 text-emerald-800 font-semibold">
                         • Asesor: {formatDisplayName(application.assignedAdvisorName)}
                       </span>
                     )}
@@ -544,8 +633,8 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            {showClientMenu && (
-              <div className="hidden sm:flex items-center gap-2 rounded-full bg-brand-platinum/80 border border-brand-charcoal/5 px-4 py-1.5 text-xs font-semibold text-brand-charcoal">
+            {showClientMenu && !loading && (
+              <div className="hidden sm:flex items-center gap-2 rounded-full bg-brand-platinum/80 border border-brand-charcoal/10 px-4 py-1.5 text-xs font-semibold text-brand-charcoal">
                 <Clock className="h-3.5 w-3.5 text-brand-red" />
                 <span>
                   Fase Actual: Paso {liveMetrics.currentStep} de 4 (
@@ -554,8 +643,8 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
               </div>
             )}
 
-            {/* CENTRO DE NOTIFICACIONES INTERNAS (CAMPANA CON POPOVER) */}
-            <div className="relative">
+            {/* Centro de Notificaciones con cierre al hacer clic afuera o presionar Escape */}
+            <div ref={notifContainerRef} className="relative">
               <button
                 type="button"
                 onClick={() => setNotifOpen((prev) => !prev)}
@@ -576,21 +665,31 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
                     <span className="font-display text-xs font-bold uppercase tracking-wider">
                       Notificaciones ({unreadCount} nuevas)
                     </span>
-                    {unreadCount > 0 && (
+                    <div className="flex items-center gap-2">
+                      {unreadCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleMarkAllRead}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-red hover:underline"
+                        >
+                          <CheckCheck className="h-3.5 w-3.5" />
+                          <span>Marcar leídas</span>
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={handleMarkAllRead}
-                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-red hover:underline"
+                        onClick={() => setNotifOpen(false)}
+                        className="rounded-lg p-1 text-white/60 hover:text-white"
+                        aria-label="Cerrar notificaciones"
                       >
-                        <CheckCheck className="h-3.5 w-3.5" />
-                        <span>Marcar leídas</span>
+                        <X className="h-3.5 w-3.5" />
                       </button>
-                    )}
+                    </div>
                   </div>
 
                   <div className="max-h-80 overflow-y-auto divide-y divide-brand-platinum">
                     {notifications.length === 0 ? (
-                      <div className="p-6 text-center text-xs text-brand-charcoal/50">
+                      <div className="p-6 text-center text-xs text-brand-charcoal/70">
                         No tienes notificaciones pendientes.
                       </div>
                     ) : (
@@ -612,10 +711,10 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
                             <p className="text-xs font-bold text-brand-charcoal truncate">
                               {n.title}
                             </p>
-                            <p className="text-[11px] text-brand-charcoal/70 leading-relaxed">
+                            <p className="text-[11px] text-brand-charcoal/75 leading-relaxed">
                               {n.message}
                             </p>
-                            <p className="text-[10px] text-brand-charcoal/40">
+                            <p className="text-[10px] text-brand-charcoal/60">
                               {new Date(n.createdAt).toLocaleString("es-CO", {
                                 dateStyle: "short",
                                 timeStyle: "short",
@@ -633,7 +732,7 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         </header>
 
         <div className="flex-1 p-4 sm:p-6 lg:p-10 max-w-6xl w-full mx-auto">
-          {children}
+          {loading ? <DashboardContentSkeleton /> : children}
         </div>
       </main>
     </div>
@@ -644,8 +743,8 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-brand-white flex items-center justify-center">
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand-red border-t-transparent" />
+        <div className="min-h-screen bg-brand-platinum/50 p-6 lg:p-10">
+          <DashboardContentSkeleton />
         </div>
       }
     >

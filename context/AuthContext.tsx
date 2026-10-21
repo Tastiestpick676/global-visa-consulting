@@ -17,6 +17,10 @@ import { auth, db } from "@/lib/firebase/config";
 import { initializeUserAndApplication } from "@/lib/firebase/db";
 import { PreApprovedUser, UserProfile, VisaApplication } from "@/types/visa";
 
+// Políticas de Seguridad de Sesión: Ciclo de 8 horas en milisegundos
+const SESSION_MAX_DURATION_MS = 8 * 60 * 60 * 1000; // 8 Horas
+const SESSION_STORAGE_KEY = "gvc_session_issued_at";
+
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
@@ -53,6 +57,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSimulateClientViewState(val);
     if (typeof window !== "undefined") {
       sessionStorage.setItem("gvc_simulate_client", String(val));
+    }
+  };
+
+  const stampSessionStart = () => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(SESSION_STORAGE_KEY, String(Date.now()));
+    }
+  };
+
+  const clearSessionStamp = () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      sessionStorage.removeItem("gvc_simulate_client");
     }
   };
 
@@ -94,6 +111,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Vigilante de Expiración y Rotación de Token cada 8 Horas
+  useEffect(() => {
+    if (!user || typeof window === "undefined") return;
+
+    const checkAndRotateToken = async () => {
+      const issuedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
+      const now = Date.now();
+
+      if (!issuedRaw) {
+        stampSessionStart();
+        return;
+      }
+
+      const elapsed = now - Number(issuedRaw);
+
+      if (elapsed >= SESSION_MAX_DURATION_MS) {
+        // Pasaron las 8 horas: forzamos renovación de token y cierre de sesión por seguridad bancaria
+        try {
+          await user.getIdToken(true);
+        } catch {}
+        clearSessionStamp();
+        setSimulateClientViewState(false);
+        await firebaseSignOut(auth);
+        setUser(null);
+        setProfile(null);
+        setApplication(null);
+        window.location.href = "/login?reason=session_expired";
+      }
+    };
+
+    checkAndRotateToken();
+
+    // Revisión periódica cada 60 segundos + al recuperar el foco de la pestaña
+    const interval = setInterval(checkAndRotateToken, 60 * 1000);
+    window.addEventListener("focus", checkAndRotateToken);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", checkAndRotateToken);
+    };
+  }, [user]);
+
   useEffect(() => {
     let unsubUser: (() => void) | null = null;
     let unsubApp: (() => void) | null = null;
@@ -103,6 +162,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (unsubApp) unsubApp();
 
       if (currentUser) {
+        // Verificar si el sello de 8 horas ya expiró antes de hidratar
+        if (typeof window !== "undefined") {
+          const issuedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
+          if (
+            issuedRaw &&
+            Date.now() - Number(issuedRaw) >= SESSION_MAX_DURATION_MS
+          ) {
+            clearSessionStamp();
+            await firebaseSignOut(auth);
+            setUser(null);
+            setProfile(null);
+            setApplication(null);
+            setLoading(false);
+            return;
+          }
+          if (!issuedRaw) {
+            stampSessionStart();
+          }
+        }
+
         const isValid = await ensureUserInitialized(currentUser);
         if (isValid) {
           setUser(currentUser);
@@ -152,6 +231,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isValid) {
       throw new Error("UNREGISTERED_USER");
     }
+    // Forzamos un token fresco al iniciar la ventana de 8 horas
+    await cred.user.getIdToken(true);
+    stampSessionStart();
     setUser(cred.user);
   };
 
@@ -163,10 +245,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isValid) {
       throw new Error("UNREGISTERED_USER");
     }
+    await cred.user.getIdToken(true);
+    stampSessionStart();
     setUser(cred.user);
   };
 
-  // Flujo Seguro de Recuperación / Creación de Contraseña Inicial para Usuarios Autorizados
   const requestPasswordReset = async (rawEmail: string) => {
     const cleanEmail = rawEmail.trim().toLowerCase();
     if (!cleanEmail) return;
@@ -180,24 +263,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     try {
-      // 1. Verificamos si el correo está autorizado en nuestra lista blanca (allowed_emails)
       const allowedSnap = await getDoc(doc(db, "allowed_emails", cleanEmail));
       if (!allowedSnap.exists()) {
-        // Por seguridad (Anti-Enumeración), si no está en allowed_emails no enviamos nada pero resolvemos sin error
         return;
       }
 
       try {
-        // 2. Intentamos enviar el correo de restablecimiento directamente
         await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
       } catch (err: any) {
-        // 3. Si el usuario fue dado de alta en el Backoffice pero NUNCA ha creado su cuenta en Firebase Auth,
-        // inicializamos su cuenta con una entropía criptográfica temporal y disparamos el correo de inmediato
         if (
           err?.code === "auth/user-not-found" ||
           err?.code === "auth/invalid-email"
         ) {
-          const randomEntropy = `Gvc#${ crypto.randomUUID() }!9a`;
+          const randomEntropy = `Gvc#${crypto.randomUUID()}!9a`;
           const newCred = await createUserWithEmailAndPassword(
             auth,
             cleanEmail,
@@ -208,15 +286,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
         }
       }
-    } catch {
-      // Silenciamos errores internos para cumplir con el estándar anti-enumeración de cuentas
-    }
+    } catch {}
   };
 
   const signOut = async () => {
-    if (typeof window !== "undefined") {
-      sessionStorage.removeItem("gvc_simulate_client");
-    }
+    clearSessionStamp();
     setSimulateClientViewState(false);
     await firebaseSignOut(auth);
     setUser(null);
