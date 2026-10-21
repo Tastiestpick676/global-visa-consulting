@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
+import { DocumentPreviewModal } from "@/components/dashboard/DocumentPreviewModal";
 import { useAuth } from "@/context/AuthContext";
 import { db } from "@/lib/firebase/config";
 import { collection, doc, getDoc, getDocs } from "firebase/firestore";
@@ -13,9 +14,10 @@ import {
   Sparkles,
   BookOpen,
   ExternalLink,
-  Paperclip,
   UserCheck,
   Clock,
+  Eye,
+  FileText,
 } from "lucide-react";
 
 const DEFAULT_FIRM_SCHEDULE_EMBED =
@@ -72,6 +74,17 @@ function getEmbedInstagramUrl(rawUrl?: string): string | null {
   return null;
 }
 
+function isImageUrl(rawUrl?: string): boolean {
+  if (!rawUrl) return false;
+  const lower = rawUrl.toLowerCase();
+  return (
+    lower.includes(".jpg") ||
+    lower.includes(".jpeg") ||
+    lower.includes(".png") ||
+    lower.includes(".webp")
+  );
+}
+
 function formatBookingEmbedUrl(
   rawBookingUrl: string,
   clientName: string,
@@ -103,6 +116,12 @@ export default function SalaPage() {
   const [resolvedEmbedUrl, setResolvedEmbedUrl] = useState<string>("");
   const [loadingSchedule, setLoadingSchedule] = useState(true);
 
+  // Estado del Visor Integrado para los PDFs y Guías de la Sala Consular
+  const [previewDoc, setPreviewDoc] = useState<{
+    title: string;
+    fileUrl: string;
+  } | null>(null);
+
   const destination = application?.destination || profile?.destination || "USA";
   const hasAssignedAdvisor = Boolean(application?.assignedAdvisorId);
 
@@ -129,7 +148,6 @@ export default function SalaPage() {
         );
         setResources(list);
 
-        // Solo buscamos link de agenda si el cliente YA TIENE un asesor asignado
         if (application?.assignedAdvisorId) {
           let chosenUrl = extractCleanBookingUrl(
             application.assignedAdvisorBookingUrl || ""
@@ -181,6 +199,14 @@ export default function SalaPage() {
 
   return (
     <DashboardLayout>
+      {/* MODAL DEL VISOR DE DOCUMENTOS INTEGRADO */}
+      <DocumentPreviewModal
+        isOpen={Boolean(previewDoc)}
+        onClose={() => setPreviewDoc(null)}
+        title={previewDoc?.title || ""}
+        fileUrl={previewDoc?.fileUrl || ""}
+      />
+
       <div className="max-w-4xl mx-auto space-y-8 font-sans">
         {/* Encabezado */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 rounded-2xl bg-brand-charcoal p-7 sm:p-8 text-brand-white shadow-lg">
@@ -206,12 +232,12 @@ export default function SalaPage() {
               Especialista a Cargo
             </p>
             <p className="font-display text-xs font-bold text-white mt-1.5">
-                {formatDisplayName(application?.assignedAdvisorName) || "En Asignación"}
+              {formatDisplayName(application?.assignedAdvisorName) || "En Asignación"}
             </p>
           </div>
         </div>
 
-        {/* BITÁCORA DE MEETINGS Y ENTREGABLES REGISTRADOS POR EL ASESOR */}
+        {/* BITÁCORA DE MEETINGS */}
         {meetingsList.length > 0 && (
           <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-4">
             <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
@@ -242,7 +268,7 @@ export default function SalaPage() {
                       </h4>
                     </div>
                     <span className="text-[11px] font-semibold text-emerald-800">
-                      Asesor: {mtg.advisorName}
+                      Asesor: {formatDisplayName(mtg.advisorName)}
                     </span>
                   </div>
 
@@ -252,18 +278,19 @@ export default function SalaPage() {
 
                   {mtg.attachmentUrl && (
                     <div className="pt-1">
-                      <a
-                        href={mtg.attachmentUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewDoc({
+                            title: mtg.title,
+                            fileUrl: mtg.attachmentUrl || "",
+                          })
+                        }
                         className="inline-flex items-center gap-2 rounded-full bg-brand-charcoal px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-red transition-all"
                       >
-                        <Paperclip className="h-3.5 w-3.5" />
-                        <span>
-                          Descargar Entregable: {mtg.attachmentName || "Documento Oficial"}
-                        </span>
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
+                        <Eye className="h-3.5 w-3.5" />
+                        <span>Vista Previa</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -272,7 +299,7 @@ export default function SalaPage() {
           </div>
         )}
 
-        {/* FEED EDITORIAL DE PUBLICACIONES Y VIDEOS */}
+        {/* FEED EDITORIAL CON RENDERIZADO DE 1RA PÁGINA (ESTILO MINIATURA YOUTUBE + HOVER BLUR + OJO) */}
         <div className="space-y-5">
           <div className="flex items-center justify-between border-b border-brand-charcoal/10 pb-3">
             <div className="flex items-center gap-2.5">
@@ -295,12 +322,26 @@ export default function SalaPage() {
               {resources.map((item) => {
                 const youtubeEmbed = getEmbedYouTubeUrl(item.url);
                 const instagramEmbed = getEmbedInstagramUrl(item.url);
+                const isPdfOrFile =
+                  !youtubeEmbed &&
+                  !instagramEmbed &&
+                  (item.category === "Guia" ||
+                    item.category === "Documento Oficial" ||
+                    item.category === "Checklist" ||
+                    Boolean(
+                      item.url &&
+                        (item.url.toLowerCase().includes(".pdf") ||
+                          item.url.includes("firebasestorage.googleapis.com"))
+                    ));
+
+                const isImg = isImageUrl(item.url);
 
                 return (
                   <article
                     key={item.id}
                     className="rounded-3xl bg-brand-white border border-brand-charcoal/10 shadow-sm overflow-hidden transition-all hover:shadow-md"
                   >
+                    {/* 1. REPRODUCTOR YOUTUBE */}
                     {youtubeEmbed && (
                       <div className="aspect-video w-full bg-brand-charcoal border-b border-brand-platinum">
                         <iframe
@@ -313,6 +354,7 @@ export default function SalaPage() {
                       </div>
                     )}
 
+                    {/* 2. REPRODUCTOR INSTAGRAM */}
                     {instagramEmbed && (
                       <div className="w-full bg-brand-platinum/30 border-b border-brand-platinum flex justify-center py-4">
                         <iframe
@@ -323,6 +365,56 @@ export default function SalaPage() {
                       </div>
                     )}
 
+                    {/* 3. RENDERIZADO DE PRIMERA PÁGINA DEL PDF / IMAGEN ARRIBA (COMO YOUTUBE) + BLUR Y OJO EN HOVER */}
+                    {isPdfOrFile && item.url && (
+                      <div
+                        onClick={() =>
+                          setPreviewDoc({
+                            title: item.title,
+                            fileUrl: item.url || "",
+                          })
+                        }
+                        className="group relative aspect-video w-full bg-brand-platinum/60 border-b border-brand-platinum overflow-hidden cursor-pointer select-none"
+                      >
+                        {/* Renderizado en vivo de la 1ra página del documento que se desenfoca en hover */}
+                        <div className="w-full h-full transition-all duration-300 ease-out group-hover:blur-xs group-hover:scale-[1.02] pointer-events-none">
+                          {isImg ? (
+                            <img
+                              src={item.url}
+                              alt={item.title}
+                              className="w-full h-full object-cover object-top"
+                            />
+                          ) : (
+                            <iframe
+                              src={`${item.url}#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+                              title={item.title}
+                              scrolling="no"
+                              className="w-full h-[120%] -mt-2 border-0 bg-white pointer-events-none"
+                            />
+                          )}
+                        </div>
+
+                        {/* Etiqueta discreta en la esquina superior izquierda */}
+                        <div className="absolute top-4 left-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-brand-charcoal/85 backdrop-blur-xs px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm">
+                          <FileText className="h-3 w-3 text-brand-red" />
+                          <span>Vista de 1ª Página • Haz clic para ampliar</span>
+                        </div>
+
+                        {/* Capa de Hover con Blur + Círculo Central con Ojo */}
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-brand-charcoal/0 group-hover:bg-brand-charcoal/45 transition-all duration-300">
+                          <div className="flex flex-col items-center gap-2.5 opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100 transition-all duration-300">
+                            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-red text-white shadow-2xl shadow-brand-red/50 ring-4 ring-white/25">
+                              <Eye className="h-7 w-7" />
+                            </div>
+                            <span className="rounded-full bg-brand-charcoal/90 px-4 py-1.5 text-xs font-bold text-white shadow-md">
+                              Abrir Vista Previa Completa
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* PIE DE TARJETA (IGUAL QUE YOUTUBE + BOTÓN "VISTA PREVIA") */}
                     <div className="p-6 sm:p-7 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="rounded-full bg-brand-red/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-brand-red">
@@ -336,17 +428,37 @@ export default function SalaPage() {
                         </span>
                       </div>
 
-                      <h4 className="font-display text-xl font-bold text-brand-charcoal">
-                        {item.title}
-                      </h4>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1.5">
+                          <h4 className="font-display text-xl font-bold text-brand-charcoal">
+                            {item.title}
+                          </h4>
 
-                      {item.description && (
-                        <p className="text-xs sm:text-sm text-brand-charcoal/70 leading-relaxed whitespace-pre-line">
-                          {item.description}
-                        </p>
-                      )}
+                          {item.description && (
+                            <p className="text-xs sm:text-sm text-brand-charcoal/70 leading-relaxed whitespace-pre-line">
+                              {item.description}
+                            </p>
+                          )}
+                        </div>
 
-                      {item.url && !youtubeEmbed && !instagramEmbed && (
+                        {isPdfOrFile && item.url && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewDoc({
+                                title: item.title,
+                                fileUrl: item.url || "",
+                              })
+                            }
+                            className="shrink-0 inline-flex items-center gap-2 rounded-full bg-brand-charcoal px-5 py-2.5 text-xs font-semibold text-white hover:bg-brand-red transition-colors shadow-xs"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            <span>Vista Previa</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {item.url && !youtubeEmbed && !instagramEmbed && !isPdfOrFile && (
                         <div className="pt-2">
                           <a
                             href={item.url}
@@ -355,7 +467,7 @@ export default function SalaPage() {
                             className="inline-flex items-center gap-2 rounded-full bg-brand-charcoal px-5 py-2.5 text-xs font-semibold text-white hover:bg-brand-red transition-colors"
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
-                            <span>Abrir documento / recurso completo</span>
+                            <span>Abrir recurso externo</span>
                           </a>
                         </div>
                       )}
@@ -367,7 +479,7 @@ export default function SalaPage() {
           )}
         </div>
 
-        {/* AGENDA EN TIEMPO REAL (SOLO HABILITADA CUANDO EL CASO TIENE UN ASESOR ASIGNADO) */}
+        {/* AGENDA EN TIEMPO REAL */}
         <div className="rounded-3xl bg-brand-white border border-brand-charcoal/10 shadow-sm overflow-hidden">
           <div className="bg-brand-charcoal px-7 py-6 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1">
@@ -379,7 +491,7 @@ export default function SalaPage() {
               </div>
               <h3 className="font-display text-lg font-bold">
                 {hasAssignedAdvisor
-                  ? `Reserva tu Sesión 1-a-1 con ${application?.assignedAdvisorName}`
+                  ? `Reserva tu Sesión 1-a-1 con ${formatDisplayName(application?.assignedAdvisorName)}`
                   : "Asignación de Especialista Legal en Curso"}
               </h3>
               <p className="text-xs text-white/65">
@@ -402,7 +514,7 @@ export default function SalaPage() {
             </div>
           ) : loadingSchedule ? (
             <div className="p-12 text-center text-xs text-brand-charcoal/50">
-              Cargando disponibilidad de {application?.assignedAdvisorName}...
+              Cargando disponibilidad de {formatDisplayName(application?.assignedAdvisorName)}...
             </div>
           ) : (
             <div className="w-full bg-brand-white">

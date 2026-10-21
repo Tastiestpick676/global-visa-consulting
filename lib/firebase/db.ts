@@ -20,7 +20,6 @@ export function formatDisplayName(name?: string | null): string {
     .trim();
 }
 
-// Generador de entradas para el Registro de Auditoría Inmutable (Audit Trail)
 export function buildAuditLogEntry(
   action: string,
   details: string,
@@ -37,7 +36,6 @@ export function buildAuditLogEntry(
   };
 }
 
-// Disparador de Notificaciones Internas en Tiempo Real (Campana del Header)
 export async function sendInternalNotification(
   recipientId: string,
   title: string,
@@ -46,19 +44,25 @@ export async function sendInternalNotification(
 ): Promise<void> {
   if (!recipientId) return;
   try {
-    const id = `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const payload: AppNotification = {
-      id,
-      recipientId,
-      title,
-      message,
-      ...(link ? { link } : {}),
-      read: false,
-      createdAt: new Date().toISOString(),
-    };
-    await setDoc(doc(db, "notifications", id), payload);
+    const targets = recipientId === "STAFF" ? ["STAFF"] : [recipientId, "STAFF"];
+
+    await Promise.all(
+      targets.map(async (target) => {
+        const id = `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${target}`;
+        const payload: AppNotification = {
+          id,
+          recipientId: target,
+          title,
+          message,
+          ...(link ? { link } : {}),
+          read: false,
+          createdAt: new Date().toISOString(),
+        };
+        await setDoc(doc(db, "notifications", id), payload);
+      })
+    );
   } catch {
-    // Fallo silencioso si aún no están habilitadas las reglas de notifications
+    // Fallo silencioso
   }
 }
 

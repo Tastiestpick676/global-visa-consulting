@@ -871,275 +871,196 @@ function AdminDashboardContent() {
         </div>
       )}
 
-      {/* VISTA 5: ESTUDIO DE PUBLICACIÓN FINTECH PREMIUM */}
-      {activeTab === "sala-cms" && (
-        <div className="space-y-6">
-          <form
-            onSubmit={handleCreateConsularResource}
-            className="rounded-3xl bg-brand-white border border-brand-charcoal/10 shadow-sm overflow-hidden"
-          >
-            <div className="bg-brand-charcoal px-7 py-6 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-red/20 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-red">
-                  <Sparkles className="h-3 w-3" />
-                  <span>Estudio Editorial — Sala Consular</span>
-                </span>
-                <h3 className="font-display text-lg font-bold">
-                  Nueva Publicación para el Portal de Clientes
-                </h3>
-              </div>
+{/* VISTA 5: ESTUDIO DE PUBLICACIÓN FINTECH PREMIUM (ACTUALIZADO A 3 FORMATOS) */}
+{activeTab === "sala-cms" && (
+  <div className="space-y-6">
+    <form
+      onSubmit={handleCreateConsularResource}
+      className="rounded-3xl bg-brand-white border border-brand-charcoal/10 shadow-sm overflow-hidden"
+    >
+      <div className="bg-brand-charcoal px-7 py-6 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-red/20 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-red">
+            <Sparkles className="h-3 w-3" />
+            <span>Estudio Editorial — Sala Consular</span>
+          </span>
+          <h3 className="font-display text-lg font-bold">
+            Nueva Publicación para el Portal de Clientes
+          </h3>
+        </div>
 
-              <div className="inline-flex rounded-xl bg-white/10 p-1 border border-white/10 self-start sm:self-auto">
-                {[
-                  { id: "ALL", label: "🌎 Ambos" },
-                  { id: "USA", label: "🇺🇸 EE. UU." },
-                  { id: "JAPAN", label: "🇯🇵 Japón" },
-                ].map((destOpt) => (
-                  <button
-                    key={destOpt.id}
-                    type="button"
-                    onClick={() => setResDest(destOpt.id as any)}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-                      resDest === destOpt.id
-                        ? "bg-brand-red text-white shadow-xs"
-                        : "text-white/65 hover:text-white"
+        <div className="inline-flex rounded-xl bg-white/10 p-1 border border-white/10 self-start sm:self-auto">
+          {[
+            { id: "ALL", label: "🌎 Ambos" },
+            { id: "USA", label: "🇺🇸 EE. UU." },
+            { id: "JAPAN", label: "🇯🇵 Japón" },
+          ].map((destOpt) => (
+            <button
+              key={destOpt.id}
+              type="button"
+              onClick={() => setResDest(destOpt.id as any)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
+                resDest === destOpt.id
+                  ? "bg-brand-red text-white shadow-xs"
+                  : "text-white/65 hover:text-white"
+              }`}
+            >
+              {destOpt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="p-7 space-y-6">
+        <div className="space-y-2">
+          <label className="block text-xs font-bold uppercase tracking-wider text-brand-charcoal/55">
+            1. Elige el formato de contenido
+          </label>
+          {/* Unificado a 3 opciones limpias estilo Fintech */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              {
+                id: "youtube",
+                title: "Recurso Web / Redes",
+                sub: "YouTube, Instagram, Facebook o Web",
+                icon: Video,
+              },
+              {
+                id: "file",
+                title: "Subir PDF / Guía",
+                sub: "Archivo descargable y previsible",
+                icon: UploadCloud,
+              },
+              {
+                id: "note",
+                title: "Nota / Tip Legal",
+                sub: "Artículo o consejo editorial",
+                icon: BookOpen,
+              },
+            ].map((fmt) => {
+              const Icon = fmt.icon;
+              const active = postFormat === fmt.id || (fmt.id === "youtube" && postFormat === "instagram");
+              return (
+                <button
+                  key={fmt.id}
+                  type="button"
+                  onClick={() => setPostFormat(fmt.id === "youtube" ? "youtube" : fmt.id as any)}
+                  className={`flex flex-col items-start rounded-2xl p-4 border text-left transition-all ${
+                    active
+                      ? "border-brand-red bg-brand-red/[0.04] ring-2 ring-brand-red/15"
+                      : "border-brand-charcoal/10 bg-brand-platinum/30 hover:bg-brand-platinum/60"
+                  }`}
+                >
+                  <div
+                    className={`flex h-9 w-9 items-center justify-center rounded-xl mb-2.5 ${
+                      active
+                        ? "bg-brand-red text-white"
+                        : "bg-brand-charcoal/10 text-brand-charcoal"
                     }`}
                   >
-                    {destOpt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="p-7 space-y-6">
-              <div className="space-y-2">
-                <label className="block text-xs font-bold uppercase tracking-wider text-brand-charcoal/55">
-                  1. Elige el formato de contenido
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {[
-                    {
-                      id: "youtube",
-                      title: "Video YouTube",
-                      sub: "Reproductor embebido",
-                      icon: Video,
-                    },
-                    {
-                      id: "instagram",
-                      title: "Instagram / Reel",
-                      sub: "Post o Reel interactivo",
-                      icon: Camera,
-                    },
-                    {
-                      id: "file",
-                      title: "Subir PDF / Guía",
-                      sub: "Archivo descargable",
-                      icon: UploadCloud,
-                    },
-                    {
-                      id: "note",
-                      title: "Nota / Tip Legal",
-                      sub: "Artículo o enlace web",
-                      icon: BookOpen,
-                    },
-                  ].map((fmt) => {
-                    const Icon = fmt.icon;
-                    const active = postFormat === fmt.id;
-                    return (
-                      <button
-                        key={fmt.id}
-                        type="button"
-                        onClick={() => setPostFormat(fmt.id as any)}
-                        className={`flex flex-col items-start rounded-2xl p-4 border text-left transition-all ${
-                          active
-                            ? "border-brand-red bg-brand-red/[0.04] ring-2 ring-brand-red/15"
-                            : "border-brand-charcoal/10 bg-brand-platinum/30 hover:bg-brand-platinum/60"
-                        }`}
-                      >
-                        <div
-                          className={`flex h-9 w-9 items-center justify-center rounded-xl mb-2.5 ${
-                            active
-                              ? "bg-brand-red text-white"
-                              : "bg-brand-charcoal/10 text-brand-charcoal"
-                          }`}
-                        >
-                          <Icon className="h-4 w-4" />
-                        </div>
-                        <span className="font-display text-xs font-bold text-brand-charcoal">
-                          {fmt.title}
-                        </span>
-                        <span className="text-[11px] text-brand-charcoal/50 mt-0.5">
-                          {fmt.sub}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
-                    2. Título de la Publicación *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={resTitle}
-                    onChange={(e) => setResTitle(e.target.value)}
-                    placeholder="Ej. Cómo responder en 20 segundos al Oficial Consular"
-                    className={inputBaseClass}
-                  />
-                </div>
-
-                {postFormat === "file" ? (
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-brand-charcoal">
-                      3. Archivo PDF o Imagen *
-                    </label>
-                    <label className="cursor-pointer flex items-center justify-between h-11 rounded-xl border border-dashed border-brand-red/40 bg-brand-red/[0.02] px-4 text-xs font-semibold text-brand-charcoal hover:bg-brand-red/[0.06] transition-all">
-                      <span className="truncate pr-2">
-                        {resFile ? `📄 ${resFile.name}` : "Haz clic para elegir PDF o Imagen..."}
-                      </span>
-                      <span className="shrink-0 rounded-lg bg-brand-red px-2.5 py-1 text-[10px] font-bold text-white uppercase">
-                        Explorar
-                      </span>
-                      <input
-                        type="file"
-                        accept=".pdf,.jpg,.jpeg,.png"
-                        className="hidden"
-                        onChange={(e) => setResFile(e.target.files?.[0] || null)}
-                      />
-                    </label>
+                    <Icon className="h-4 w-4" />
                   </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-brand-charcoal">
-                      3.{" "}
-                      {postFormat === "youtube"
-                        ? "Link del Video o Short de YouTube *"
-                        : postFormat === "instagram"
-                        ? "Link del Post o Reel de Instagram *"
-                        : "Enlace Externo (Opcional)"}
-                    </label>
-                    <input
-                      type="url"
-                      required={postFormat === "youtube" || postFormat === "instagram"}
-                      value={resUrl}
-                      onChange={(e) => setResUrl(e.target.value)}
-                      placeholder={
-                        postFormat === "youtube"
-                          ? "https://www.youtube.com/watch?v=... o https://youtu.be/..."
-                          : postFormat === "instagram"
-                          ? "https://www.instagram.com/p/... o /reel/..."
-                          : "https://..."
-                      }
-                      className={inputBaseClass}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
-                    4. Notas o Contexto Editorial
-                  </label>
-                  <span className="rounded-md bg-brand-platinum px-2 py-0.5 text-[10px] font-semibold text-brand-charcoal/60">
-                    Opcional
+                  <span className="font-display text-xs font-bold text-brand-charcoal">
+                    {fmt.title}
                   </span>
-                </div>
-                <textarea
-                  rows={2}
-                  value={resDesc}
-                  onChange={(e) => setResDesc(e.target.value)}
-                  placeholder="Si deseas, agrega un resumen o instrucciones adicionales (puedes dejarlo en blanco)..."
-                  className="w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 p-3.5 text-sm font-sans text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all"
-                />
-              </div>
-
-              <div className="flex items-center justify-between pt-2 border-t border-brand-platinum">
-                <p className="text-[11px] text-brand-charcoal/50">
-                  Al eliminar una publicación de abajo, también se borra su archivo de Firebase Storage.
-                </p>
-                <button
-                  type="submit"
-                  disabled={submitting || uploadingRes}
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-red px-7 py-3 text-xs font-semibold text-brand-white shadow-md shadow-brand-red/20 hover:bg-brand-red/90 disabled:opacity-50 transition-all"
-                >
-                  <Plus className="h-4 w-4" />
-                  <span>
-                    {uploadingRes ? "Publicando..." : "Publicar en Sala Consular"}
+                  <span className="text-[11px] text-brand-charcoal/50 mt-0.5">
+                    {fmt.sub}
                   </span>
                 </button>
-              </div>
-            </div>
-          </form>
-
-          {/* Lista de Publicaciones Activas */}
-          <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-4">
-            <h4 className="font-display text-base font-bold text-brand-charcoal">
-              Publicaciones Activas en el Feed ({consularResources.length})
-            </h4>
-
-            {consularResources.length === 0 ? (
-              <p className="text-xs text-brand-charcoal/50">
-                Aún no hay publicaciones personalizadas.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {consularResources.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl bg-brand-platinum/30 p-4 border border-brand-platinum"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="rounded bg-brand-charcoal px-2 py-0.5 text-[10px] font-bold text-white uppercase">
-                          {item.destination === "ALL" ? "🌎 Ambos" : item.destination}
-                        </span>
-                        <span className="rounded bg-brand-red/10 px-2 py-0.5 text-[10px] font-bold text-brand-red uppercase">
-                          {item.category}
-                        </span>
-                        <p className="text-xs font-bold text-brand-charcoal">
-                          {item.title}
-                        </p>
-                      </div>
-                      {item.description && (
-                        <p className="text-xs text-brand-charcoal/65">
-                          {item.description}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-3 shrink-0">
-                      {item.url && (
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-brand-red hover:underline"
-                        >
-                          <Link2 className="h-3.5 w-3.5" />
-                          <span>Abrir Media</span>
-                        </a>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteConsularResource(item)}
-                        className="p-2 text-brand-charcoal/40 hover:text-brand-red transition-colors"
-                        title="Eliminar publicación y archivo de Storage"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+              );
+            })}
           </div>
         </div>
-      )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold text-brand-charcoal">
+              2. Título de la Publicación *
+            </label>
+            <input
+              type="text"
+              required
+              value={resTitle}
+              onChange={(e) => setResTitle(e.target.value)}
+              placeholder="Ej. Cómo responder en 20 segundos al Oficial Consular"
+              className={inputBaseClass}
+            />
+          </div>
+
+          {postFormat === "file" ? (
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-brand-charcoal">
+                3. Archivo PDF o Imagen *
+              </label>
+              <label className="cursor-pointer flex items-center justify-between h-11 rounded-xl border border-dashed border-brand-red/40 bg-brand-red/[0.02] px-4 text-xs font-semibold text-brand-charcoal hover:bg-brand-red/[0.06] transition-all">
+                <span className="truncate pr-2">
+                  {resFile ? `📄 ${resFile.name}` : "Haz clic para elegir PDF o Imagen..."}
+                </span>
+                <span className="shrink-0 rounded-lg bg-brand-red px-2.5 py-1 text-[10px] font-bold text-white uppercase">
+                  Explorar
+                </span>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  className="hidden"
+                  onChange={(e) => setResFile(e.target.files?.[0] || null)}
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-brand-charcoal">
+                3. Enlace URL (YouTube, Instagram, Facebook o Web) *
+              </label>
+              <input
+                type="url"
+                required
+                value={resUrl}
+                onChange={(e) => setResUrl(e.target.value)}
+                placeholder="https://www.youtube.com/watch?v=... o https://instagram.com/..."
+                className={inputBaseClass}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="block text-xs font-semibold text-brand-charcoal">
+              4. Notas o Contexto Editorial
+            </label>
+            <span className="rounded-md bg-brand-platinum px-2 py-0.5 text-[10px] font-semibold text-brand-charcoal/60">
+              Opcional
+            </span>
+          </div>
+          <textarea
+            rows={2}
+            value={resDesc}
+            onChange={(e) => setResDesc(e.target.value)}
+            placeholder="Si deseas, agrega un resumen o instrucciones adicionales..."
+            className="w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 p-3.5 text-sm font-sans text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all"
+          />
+        </div>
+
+        <div className="flex items-center justify-between pt-2 border-t border-brand-platinum">
+          <p className="text-[11px] text-brand-charcoal/50">
+            Al eliminar una publicación, también se borra su archivo físico de Firebase Storage.
+          </p>
+          <button
+            type="submit"
+            disabled={submitting || uploadingRes}
+            className="inline-flex items-center gap-2 rounded-full bg-brand-red px-7 py-3 text-xs font-semibold text-brand-white shadow-md shadow-brand-red/20 hover:bg-brand-red/90 disabled:opacity-50 transition-all"
+          >
+            <Plus className="h-4 w-4" />
+            <span>
+              {uploadingRes ? "Publicando..." : "Publicar en Sala Consular"}
+            </span>
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+)}
 
       {/* VISTA 6: EQUIPO & ROLES INTERNOS */}
       {activeTab === "equipo" && (
