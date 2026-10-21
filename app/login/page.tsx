@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, redirect } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -40,10 +40,18 @@ export default function LoginPage() {
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
-  const { signIn, signInWithGoogle, requestPasswordReset } = useAuth();
-  const router = useRouter();
+const { user, profile, loading, signIn, signInWithGoogle, requestPasswordReset } = useAuth();
+const router = useRouter();
 
-  // Cargar estado de bloqueo desde localStorage al iniciar
+// Si el usuario ya tiene sesión abierta y hace clic en "Portal Clientes", entra directo al Dashboard
+if (!loading && user) {
+  const targetUrl =
+    profile?.role === "admin" || profile?.role === "advisor"
+      ? "/dashboard/admin?tab=gobernanza"
+      : "/dashboard";
+  redirect(targetUrl);
+}
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const savedAttempts = Number(
@@ -63,7 +71,6 @@ export default function LoginPage() {
     }
   }, []);
 
-  // Contador regresivo en vivo cuando la cuenta está bloqueada temporalmente
   useEffect(() => {
     if (!lockoutUntil) {
       setRemainingSeconds(0);
@@ -134,10 +141,13 @@ export default function LoginPage() {
         );
       } else {
         registerFailedAttempt();
-        const remaining = Math.max(0, MAX_FAILED_ATTEMPTS - (failedAttempts + 1));
+        const remaining = Math.max(
+          0,
+          MAX_FAILED_ATTEMPTS - (failedAttempts + 1)
+        );
         setError(
           remaining > 0
-            ? `Credenciales inválidas. Si es tu primer ingreso sin Google o no recuerdas tu clave, usa "¿Olvidaste tu contraseña?". (${remaining} intentos restantes antes del bloqueo de seguridad).`
+            ? `Credenciales inválidas. Si es tu primer ingreso sin Google o no recuerdas tu clave, usa "¿Olvidaste o aún no tienes contraseña?". (${remaining} intentos restantes antes del bloqueo de seguridad).`
             : "Se ha alcanzado el límite de intentos fallidos permitidos."
         );
       }
@@ -158,7 +168,6 @@ export default function LoginPage() {
       await requestPasswordReset(email);
       setResetSentSuccess(true);
     } catch {
-      // Siempre mostramos el mismo mensaje neutro por seguridad anti-enumeración
       setResetSentSuccess(true);
     } finally {
       setSubmitting(false);
@@ -193,8 +202,11 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-brand-white grid grid-cols-1 lg:grid-cols-12 font-sans">
-      {/* Columna Izquierda: Branding y Seguridad */}
-      <div className="hidden lg:flex lg:col-span-5 bg-brand-charcoal text-brand-white p-12 flex-col justify-between relative overflow-hidden">
+      {/* Columna Izquierda: Branding y Seguridad (aside semántico) */}
+      <aside
+        aria-label="Información de seguridad del portal"
+        className="hidden lg:flex lg:col-span-5 bg-brand-charcoal text-brand-white p-12 flex-col justify-between relative overflow-hidden"
+      >
         <div className="relative z-10">
           <Link href="/" className="inline-flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red text-brand-white shadow-md shadow-brand-red/20">
@@ -213,7 +225,7 @@ export default function LoginPage() {
             <h1 className="font-display text-4xl font-bold leading-tight">
               Control total de tu expediente migratorio en tiempo real.
             </h1>
-            <p className="text-sm text-white/70 leading-relaxed max-w-md">
+            <p className="text-sm text-white/80 leading-relaxed max-w-md">
               Toda tu información personal (PII) está protegida bajo reglas de aislamiento criptográfico, detección de fuerza bruta y verificación de identidad.
             </p>
           </div>
@@ -224,18 +236,20 @@ export default function LoginPage() {
             <Lock className="h-4 w-4" />
             <span>Seguridad Nivel Bancario • Zero-Trust</span>
           </div>
-          <p className="text-xs text-white/60">
-            Monitoreo activo contra intentos fallidos, enlaces de recuperación con expiración automática y cifrado TLS 1.3.
+          <p className="text-xs text-white/75">
+            Monitoreo activo contra intentos fallidos, enlaces de recuperación con expiración automática y rotación de sesión cada 8 horas.
           </p>
         </div>
-      </div>
+      </aside>
 
-      {/* Columna Derecha: Formulario de Login o Recuperación de Contraseña */}
-      <div className="lg:col-span-7 flex items-center justify-center p-6 sm:p-12">
+      {/* Columna Derecha: Landmark <main> requerido por Lighthouse */}
+      <main className="lg:col-span-7 flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-md space-y-7">
-          {/* ALERTA DE BLOQUEO TEMPORAL POR INTENTOS FALLIDOS / ATAQUE DE FUERZA BRUTA */}
           {isLocked && (
-            <div className="rounded-2xl bg-brand-red/10 border-2 border-brand-red p-5 space-y-2.5 shadow-lg">
+            <div
+              role="alert"
+              className="rounded-2xl bg-brand-red/10 border-2 border-brand-red p-5 space-y-2.5 shadow-lg"
+            >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-brand-red font-display text-sm font-bold">
                   <ShieldAlert className="h-5 w-5 shrink-0" />
@@ -245,7 +259,7 @@ export default function LoginPage() {
                   {formatCooldown(remainingSeconds)}
                 </span>
               </div>
-              <p className="text-xs text-brand-charcoal/80 leading-relaxed">
+              <p className="text-xs text-brand-charcoal/85 leading-relaxed">
                 Por protocolos de seguridad contra accesos no autorizados, hemos bloqueado temporalmente los intentos de inicio de sesión tras detectar múltiples fallos consecutivos.
               </p>
             </div>
@@ -257,19 +271,21 @@ export default function LoginPage() {
                 <h2 className="font-display text-3xl font-bold text-brand-charcoal">
                   Acceso al Portal
                 </h2>
-                <p className="text-xs sm:text-sm text-brand-charcoal/60">
+                <p className="text-xs sm:text-sm text-brand-charcoal/75">
                   Ingresa con tus credenciales autorizadas para consultar el avance de tu trámite.
                 </p>
               </div>
 
-              {/* Alerta cuando el usuario NO está registrado en allowed_emails */}
               {unregisteredAlert && (
-                <div className="rounded-2xl bg-brand-charcoal text-white p-5 space-y-3 border-l-4 border-brand-red shadow-lg">
+                <div
+                  role="alert"
+                  className="rounded-2xl bg-brand-charcoal text-white p-5 space-y-3 border-l-4 border-brand-red shadow-lg"
+                >
                   <div className="flex items-center gap-2 text-brand-red font-bold text-xs uppercase tracking-wider">
                     <AlertCircle className="h-4 w-4 shrink-0" />
                     <span>Cuenta No Provisionada</span>
                   </div>
-                  <p className="text-xs text-white/80 leading-relaxed">
+                  <p className="text-xs text-white/85 leading-relaxed">
                     Este correo aún no tiene un expediente activo en <strong>Global Visa Consulting</strong>. El acceso al portal es exclusivo para clientes que ya han iniciado su servicio.
                   </p>
                   <a
@@ -287,7 +303,10 @@ export default function LoginPage() {
               )}
 
               {error && !isLocked && (
-                <div className="flex items-start gap-2.5 rounded-xl bg-brand-red/10 border border-brand-red/30 p-3.5 text-xs font-semibold text-brand-red">
+                <div
+                  role="alert"
+                  className="flex items-start gap-2.5 rounded-xl bg-brand-red/10 border border-brand-red/30 p-3.5 text-xs font-semibold text-brand-red"
+                >
                   <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
@@ -300,7 +319,7 @@ export default function LoginPage() {
                 disabled={submitting || isLocked}
                 className="w-full flex items-center justify-center gap-3 rounded-full border border-brand-charcoal/15 bg-brand-white px-6 py-3.5 text-xs sm:text-sm font-semibold text-brand-charcoal shadow-2xs hover:bg-brand-platinum/60 transition-all disabled:opacity-50"
               >
-                <svg className="h-4 w-4" viewBox="0 0 24 24">
+                <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
                   <path
                     fill="#4285F4"
                     d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -321,9 +340,10 @@ export default function LoginPage() {
                 <span>Continuar con Google</span>
               </button>
 
+              {/* Divisor con contraste WCAG AA mejorado (text-brand-charcoal/75) */}
               <div className="relative flex py-1 items-center">
                 <div className="flex-grow border-t border-brand-platinum" />
-                <span className="shrink mx-4 text-[11px] font-semibold uppercase tracking-widest text-brand-charcoal/40">
+                <span className="shrink mx-4 text-[11px] font-semibold uppercase tracking-widest text-brand-charcoal/75">
                   o con tu correo
                 </span>
                 <div className="flex-grow border-t border-brand-platinum" />
@@ -331,23 +351,31 @@ export default function LoginPage() {
 
               <form onSubmit={handleSubmitLogin} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
+                  <label
+                    htmlFor="login-email"
+                    className="block text-xs font-semibold text-brand-charcoal"
+                  >
                     Correo Electrónico
                   </label>
                   <input
+                    id="login-email"
                     type="email"
                     required
+                    autoComplete="email"
                     disabled={isLocked}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="cliente@correo.com"
-                    className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-4 text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none disabled:opacity-50"
+                    className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 px-4 text-sm text-brand-charcoal placeholder:text-brand-charcoal/50 focus:bg-brand-white focus:border-brand-red focus:outline-none disabled:opacity-50"
                   />
                 </div>
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <label className="block text-xs font-semibold text-brand-charcoal">
+                    <label
+                      htmlFor="login-password"
+                      className="block text-xs font-semibold text-brand-charcoal"
+                    >
                       Contraseña Privada
                     </label>
                     <button
@@ -357,25 +385,38 @@ export default function LoginPage() {
                         setError("");
                         setResetSentSuccess(false);
                       }}
-                      className="text-xs font-semibold text-brand-red hover:underline"
+                      className="text-xs font-bold text-brand-red hover:underline py-1"
                     >
                       ¿Olvidaste o aún no tienes contraseña?
                     </button>
                   </div>
                   <div className="relative">
                     <input
+                      id="login-password"
                       type={showPassword ? "text" : "password"}
                       required
+                      autoComplete="current-password"
                       disabled={isLocked}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
-                      className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 pl-4 pr-11 text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none disabled:opacity-50"
+                      className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 pl-4 pr-12 text-sm text-brand-charcoal placeholder:text-brand-charcoal/50 focus:bg-brand-white focus:border-brand-red focus:outline-none disabled:opacity-50"
                     />
+                    {/* Botón accesible con aria-label y área táctil de 36x36px (>= 24x24px requerido por Lighthouse) */}
                     <button
                       type="button"
                       onClick={() => setShowPassword((prev) => !prev)}
-                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-brand-charcoal/45 hover:text-brand-charcoal"
+                      aria-label={
+                        showPassword
+                          ? "Ocultar contraseña"
+                          : "Mostrar contraseña"
+                      }
+                      title={
+                        showPassword
+                          ? "Ocultar contraseña"
+                          : "Mostrar contraseña"
+                      }
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-brand-charcoal/65 hover:bg-brand-charcoal/5 hover:text-brand-charcoal transition-colors"
                     >
                       {showPassword ? (
                         <EyeOff className="h-4 w-4" />
@@ -401,7 +442,6 @@ export default function LoginPage() {
               </form>
             </>
           ) : (
-            /* MODO: CONFIGURAR O RESTABLECER CONTRASEÑA (ESTÁNDAR FINTECH ANTI-ENUMERACIÓN) */
             <div className="space-y-6">
               <button
                 type="button"
@@ -410,7 +450,7 @@ export default function LoginPage() {
                   setResetSentSuccess(false);
                   setError("");
                 }}
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-charcoal/60 hover:text-brand-charcoal transition-colors"
+                className="inline-flex items-center gap-1.5 py-1 text-xs font-semibold text-brand-charcoal/75 hover:text-brand-charcoal transition-colors"
               >
                 <ArrowLeft className="h-4 w-4" />
                 <span>Volver al inicio de sesión</span>
@@ -423,21 +463,24 @@ export default function LoginPage() {
                 <h2 className="font-display text-2xl sm:text-3xl font-bold text-brand-charcoal pt-1">
                   Restablecer o Crear Contraseña
                 </h2>
-                <p className="text-xs sm:text-sm text-brand-charcoal/60 leading-relaxed">
+                <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
                   Si tu cuenta fue creada por nuestro equipo o si olvidaste tu clave, ingresa tu correo autorizado para recibir un enlace seguro de configuración.
                 </p>
               </div>
 
               {resetSentSuccess ? (
-                <div className="rounded-2xl bg-emerald-500/10 border border-emerald-500/30 p-5 space-y-3">
+                <div
+                  role="status"
+                  className="rounded-2xl bg-emerald-500/10 border border-emerald-500/30 p-5 space-y-3"
+                >
                   <div className="flex items-center gap-2.5 text-emerald-800 font-display text-sm font-bold">
                     <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
                     <span>Solicitud Procesada con Seguridad</span>
                   </div>
-                  <p className="text-xs text-emerald-950/80 leading-relaxed">
+                  <p className="text-xs text-emerald-950/85 leading-relaxed">
                     Si el correo <strong>{email}</strong> se encuentra registrado y autorizado en nuestro sistema, recibirás en los próximos minutos un enlace criptográfico de un solo uso para configurar tu contraseña.
                   </p>
-                  <p className="text-[11px] text-emerald-900/60">
+                  <p className="text-[11px] text-emerald-900/75">
                     Por seguridad, el enlace expirará automáticamente tras su uso o después del tiempo límite establecido. Revisa también tu bandeja de Spam o Promociones.
                   </p>
                 </div>
@@ -447,17 +490,22 @@ export default function LoginPage() {
                   className="space-y-4"
                 >
                   <div className="space-y-1.5">
-                    <label className="block text-xs font-semibold text-brand-charcoal">
+                    <label
+                      htmlFor="reset-email"
+                      className="block text-xs font-semibold text-brand-charcoal"
+                    >
                       Correo Electrónico Autorizado
                     </label>
                     <input
+                      id="reset-email"
                       type="email"
                       required
+                      autoComplete="email"
                       disabled={isLocked}
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="cliente@correo.com"
-                      className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-4 text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none"
+                      className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 px-4 text-sm text-brand-charcoal placeholder:text-brand-charcoal/50 focus:bg-brand-white focus:border-brand-red focus:outline-none"
                     />
                   </div>
 
@@ -478,16 +526,17 @@ export default function LoginPage() {
             </div>
           )}
 
+          {/* Enlace inferior con contraste WCAG AA (text-brand-charcoal/75) */}
           <div className="pt-4 border-t border-brand-platinum text-center">
             <Link
               href="/"
-              className="text-xs font-medium text-brand-charcoal/50 hover:text-brand-charcoal"
+              className="inline-block py-1 text-xs font-semibold text-brand-charcoal/75 hover:text-brand-charcoal transition-colors"
             >
               ← Volver a la página principal de Global Visa Consulting
             </Link>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

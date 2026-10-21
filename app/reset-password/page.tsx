@@ -47,7 +47,6 @@ function ResetPasswordContent() {
       }
 
       try {
-        // Verifica firma criptográfica y que el token no haya expirado ni haya sido usado
         const email = await verifyPasswordResetCode(auth, oobCode);
         setAccountEmail(email);
         setCodeExpiredOrInvalid(false);
@@ -61,7 +60,6 @@ function ResetPasswordContent() {
     checkResetToken();
   }, [oobCode]);
 
-  // Validadores en vivo de estándares de seguridad de contraseña
   const hasMinLength = newPassword.length >= 8;
   const hasUpper = /[A-Z]/.test(newPassword);
   const hasLower = /[a-z]/.test(newPassword);
@@ -100,22 +98,22 @@ function ResetPasswordContent() {
 
   if (verifyingCode) {
     return (
-      <div className="min-h-screen bg-brand-platinum/50 flex items-center justify-center p-6 font-sans">
+      <main className="min-h-screen bg-brand-platinum/50 flex items-center justify-center p-6 font-sans">
         <div className="rounded-3xl bg-brand-white p-8 border border-brand-charcoal/10 shadow-lg max-w-md w-full text-center space-y-3">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand-red border-t-transparent mx-auto" />
-          <p className="font-display text-base font-bold text-brand-charcoal">
+          <h1 className="font-display text-base font-bold text-brand-charcoal">
             Verificando firma criptográfica del enlace...
-          </p>
-          <p className="text-xs text-brand-charcoal/55">
+          </h1>
+          <p className="text-xs text-brand-charcoal/75">
             Comprobando validez temporal y autenticidad del token de seguridad.
           </p>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen bg-brand-platinum/50 flex flex-col justify-center items-center p-6 font-sans">
+    <main className="min-h-screen bg-brand-platinum/50 flex flex-col justify-center items-center p-6 font-sans">
       <div className="w-full max-w-md space-y-6">
         <div className="flex justify-center">
           <Link href="/" className="inline-flex items-center gap-3">
@@ -129,17 +127,16 @@ function ResetPasswordContent() {
         </div>
 
         <div className="rounded-3xl bg-brand-white p-7 sm:p-9 border border-brand-charcoal/10 shadow-xl space-y-6">
-          {/* ESTADO 1: ENLACE EXPIRADO, USADO O INVÁLIDO */}
           {codeExpiredOrInvalid ? (
             <div className="text-center space-y-4">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-red/10 text-brand-red mx-auto">
                 <ShieldAlert className="h-7 w-7" />
               </div>
               <div className="space-y-1.5">
-                <h2 className="font-display text-2xl font-bold text-brand-charcoal">
+                <h1 className="font-display text-2xl font-bold text-brand-charcoal">
                   Enlace Expirado o Utilizado
-                </h2>
-                <p className="text-xs sm:text-sm text-brand-charcoal/65 leading-relaxed">
+                </h1>
+                <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
                   Por estándares de seguridad bancaria, los enlaces de recuperación son de <strong>un solo uso</strong> y tienen un tiempo máximo de expiración.
                 </p>
               </div>
@@ -154,19 +151,18 @@ function ResetPasswordContent() {
               </div>
             </div>
           ) : successChanged ? (
-            /* ESTADO 2: CONTRASEÑA CAMBIADA EXITOSAMENTE */
             <div className="text-center space-y-5">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-600 mx-auto">
                 <CheckCircle2 className="h-8 w-8" />
               </div>
               <div className="space-y-1.5">
-                <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-800">
                   Credencial Actualizada
                 </span>
-                <h2 className="font-display text-2xl font-bold text-brand-charcoal pt-1">
+                <h1 className="font-display text-2xl font-bold text-brand-charcoal pt-1">
                   Tu contraseña ha sido cambiada exitosamente
-                </h2>
-                <p className="text-xs sm:text-sm text-brand-charcoal/65 leading-relaxed">
+                </h1>
+                <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
                   El enlace temporal ha sido invalidado automáticamente. Ya puedes iniciar sesión en tu portal con tu nueva clave privada.
                 </p>
               </div>
@@ -181,23 +177,25 @@ function ResetPasswordContent() {
               </button>
             </div>
           ) : (
-            /* ESTADO 3: FORMULARIO PARA DEFINIR LA NUEVA CONTRASEÑA */
             <>
               <div className="space-y-2">
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-red/10 text-brand-red">
                   <KeyRound className="h-5 w-5" />
                 </div>
-                <h2 className="font-display text-2xl font-bold text-brand-charcoal pt-1">
+                <h1 className="font-display text-2xl font-bold text-brand-charcoal pt-1">
                   Configurar Nueva Contraseña
-                </h2>
-                <p className="text-xs text-brand-charcoal/60">
+                </h1>
+                <p className="text-xs text-brand-charcoal/75">
                   Cuenta verificada:{" "}
                   <strong className="text-brand-charcoal">{accountEmail}</strong>
                 </p>
               </div>
 
               {errorMsg && (
-                <div className="flex items-center gap-2.5 rounded-xl bg-brand-red/10 border border-brand-red/30 p-3.5 text-xs font-semibold text-brand-red">
+                <div
+                  role="alert"
+                  className="flex items-center gap-2.5 rounded-xl bg-brand-red/10 border border-brand-red/30 p-3.5 text-xs font-semibold text-brand-red"
+                >
                   <AlertCircle className="h-4 w-4 shrink-0" />
                   <span>{errorMsg}</span>
                 </div>
@@ -205,22 +203,32 @@ function ResetPasswordContent() {
 
               <form onSubmit={handleConfirmNewPassword} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
+                  <label
+                    htmlFor="new-password"
+                    className="block text-xs font-semibold text-brand-charcoal"
+                  >
                     Nueva Contraseña Privada
                   </label>
                   <div className="relative">
                     <input
+                      id="new-password"
                       type={showPass ? "text" : "password"}
                       required
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
                       placeholder="Mínimo 8 caracteres..."
-                      className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 pl-4 pr-11 text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none"
+                      className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 pl-4 pr-12 text-sm text-brand-charcoal placeholder:text-brand-charcoal/50 focus:bg-brand-white focus:border-brand-red focus:outline-none"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPass((p) => !p)}
-                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-brand-charcoal/45 hover:text-brand-charcoal"
+                      aria-label={
+                        showPass ? "Ocultar contraseña" : "Mostrar contraseña"
+                      }
+                      title={
+                        showPass ? "Ocultar contraseña" : "Mostrar contraseña"
+                      }
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-brand-charcoal/65 hover:bg-brand-charcoal/5 hover:text-brand-charcoal transition-colors"
                     >
                       {showPass ? (
                         <EyeOff className="h-4 w-4" />
@@ -232,20 +240,23 @@ function ResetPasswordContent() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-brand-charcoal">
+                  <label
+                    htmlFor="confirm-password"
+                    className="block text-xs font-semibold text-brand-charcoal"
+                  >
                     Confirmar Nueva Contraseña
                   </label>
                   <input
+                    id="confirm-password"
                     type={showPass ? "text" : "password"}
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Repite tu contraseña..."
-                    className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-4 text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none"
+                    className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 px-4 text-sm text-brand-charcoal placeholder:text-brand-charcoal/50 focus:bg-brand-white focus:border-brand-red focus:outline-none"
                   />
                 </div>
 
-                {/* Checklist de Estándares de Seguridad de Contraseña */}
                 <div className="rounded-2xl bg-brand-platinum/40 p-4 border border-brand-platinum space-y-2 text-[11px]">
                   <p className="font-bold text-brand-charcoal uppercase tracking-wider text-[10px]">
                     Estándares de Seguridad Requeridos:
@@ -254,8 +265,8 @@ function ResetPasswordContent() {
                     <span
                       className={
                         hasMinLength
-                          ? "text-emerald-700 font-semibold"
-                          : "text-brand-charcoal/50"
+                          ? "text-emerald-800 font-semibold"
+                          : "text-brand-charcoal/70"
                       }
                     >
                       {hasMinLength ? "✓" : "•"} Mínimo 8 caracteres
@@ -263,8 +274,8 @@ function ResetPasswordContent() {
                     <span
                       className={
                         hasUpper && hasLower
-                          ? "text-emerald-700 font-semibold"
-                          : "text-brand-charcoal/50"
+                          ? "text-emerald-800 font-semibold"
+                          : "text-brand-charcoal/70"
                       }
                     >
                       {hasUpper && hasLower ? "✓" : "•"} Mayúsculas y minúsculas
@@ -272,8 +283,8 @@ function ResetPasswordContent() {
                     <span
                       className={
                         hasNumberOrSymbol
-                          ? "text-emerald-700 font-semibold"
-                          : "text-brand-charcoal/50"
+                          ? "text-emerald-800 font-semibold"
+                          : "text-brand-charcoal/70"
                       }
                     >
                       {hasNumberOrSymbol ? "✓" : "•"} Al menos 1 número o símbolo
@@ -281,8 +292,8 @@ function ResetPasswordContent() {
                     <span
                       className={
                         passwordsMatch
-                          ? "text-emerald-700 font-semibold"
-                          : "text-brand-charcoal/50"
+                          ? "text-emerald-800 font-semibold"
+                          : "text-brand-charcoal/70"
                       }
                     >
                       {passwordsMatch ? "✓" : "•"} Las contraseñas coinciden
@@ -307,7 +318,7 @@ function ResetPasswordContent() {
           )}
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -315,9 +326,9 @@ export default function ResetPasswordPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-brand-platinum/50 flex items-center justify-center">
+        <main className="min-h-screen bg-brand-platinum/50 flex items-center justify-center">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand-red border-t-transparent" />
-        </div>
+        </main>
       }
     >
       <ResetPasswordContent />

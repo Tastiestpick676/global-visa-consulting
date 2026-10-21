@@ -35,10 +35,8 @@ export default function RootLayout({
       className={`${plusJakarta.variable} ${inter.variable} scroll-smooth`}
     >
       <head>
-        <link rel="preconnect" href="https://www.googleapis.com" />
         <link rel="preconnect" href="https://identitytoolkit.googleapis.com" />
         <link rel="preconnect" href="https://firestore.googleapis.com" />
-        <link rel="preconnect" href="https://apis.google.com" />
       </head>
       <body className="font-sans antialiased bg-brand-white text-brand-charcoal selection:bg-brand-red selection:text-white">
         <AuthProvider>{children}</AuthProvider>

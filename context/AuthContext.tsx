@@ -10,6 +10,8 @@ import {
   sendPasswordResetEmail,
   GoogleAuthProvider,
   signInWithPopup,
+  setPersistence,
+  browserLocalPersistence,
   signOut as firebaseSignOut,
 } from "firebase/auth";
 import { doc, getDoc, onSnapshot } from "firebase/firestore";
@@ -17,7 +19,6 @@ import { auth, db } from "@/lib/firebase/config";
 import { initializeUserAndApplication } from "@/lib/firebase/db";
 import { PreApprovedUser, UserProfile, VisaApplication } from "@/types/visa";
 
-// Políticas de Seguridad de Sesión: Ciclo de 8 horas en milisegundos
 const SESSION_MAX_DURATION_MS = 8 * 60 * 60 * 1000; // 8 Horas
 const SESSION_STORAGE_KEY = "gvc_session_issued_at";
 
@@ -51,6 +52,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSimulateClientViewState(true);
       }
     }
+    // Garantizar persistencia local de sesión en todas las rutas del navegador
+    setPersistence(auth, browserLocalPersistence).catch(() => {});
   }, []);
 
   const setSimulateClientView = (val: boolean) => {
@@ -111,7 +114,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Vigilante de Expiración y Rotación de Token cada 8 Horas
+  // Vigilante de Expiración y Renovación de Token cada 8 Horas
   useEffect(() => {
     if (!user || typeof window === "undefined") return;
 
@@ -127,7 +130,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const elapsed = now - Number(issuedRaw);
 
       if (elapsed >= SESSION_MAX_DURATION_MS) {
-        // Pasaron las 8 horas: forzamos renovación de token y cierre de sesión por seguridad bancaria
         try {
           await user.getIdToken(true);
         } catch {}
@@ -143,7 +145,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     checkAndRotateToken();
 
-    // Revisión periódica cada 60 segundos + al recuperar el foco de la pestaña
     const interval = setInterval(checkAndRotateToken, 60 * 1000);
     window.addEventListener("focus", checkAndRotateToken);
 
@@ -162,7 +163,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (unsubApp) unsubApp();
 
       if (currentUser) {
-        // Verificar si el sello de 8 horas ya expiró antes de hidratar
         if (typeof window !== "undefined") {
           const issuedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
           if (
@@ -186,12 +186,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (isValid) {
           setUser(currentUser);
 
+          let userReady = false;
+          let appReady = false;
+
           unsubUser = onSnapshot(doc(db, "users", currentUser.uid), (snap) => {
             if (snap.exists()) {
               const userData = snap.data() as UserProfile;
               if (!userData.role) userData.role = "client";
               setProfile(userData);
             }
+            userReady = true;
+            if (userReady && appReady) setLoading(false);
           });
 
           unsubApp = onSnapshot(
@@ -200,7 +205,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               if (snap.exists()) {
                 setApplication(snap.data() as VisaApplication);
               }
-              setLoading(false);
+              appReady = true;
+              if (userReady && appReady) setLoading(false);
             }
           );
         } else {
@@ -226,18 +232,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = async (email: string, pass: string) => {
     const cleanEmail = email.trim().toLowerCase();
+    await setPersistence(auth, browserLocalPersistence);
     const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
     const isValid = await ensureUserInitialized(cred.user);
     if (!isValid) {
       throw new Error("UNREGISTERED_USER");
     }
-    // Forzamos un token fresco al iniciar la ventana de 8 horas
     await cred.user.getIdToken(true);
     stampSessionStart();
     setUser(cred.user);
   };
 
   const signInWithGoogle = async () => {
+    await setPersistence(auth, browserLocalPersistence);
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
     const cred = await signInWithPopup(auth, provider);

@@ -1,43 +1,45 @@
 /* app/globals.css */
 @import "tailwindcss";
 
-@theme inline {
-  --font-display: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-
+@theme {
   --color-brand-red: #e11d48;
   --color-brand-charcoal: #111315;
   --color-brand-platinum: #f3f4f6;
   --color-brand-white: #ffffff;
 }
 
-@layer base {
-  html,
-  body {
-    font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  }
+/* Forzamos la vinculación directa con las fuentes cargadas por next/font/google */
+.font-sans,
+body,
+input,
+select,
+textarea,
+button {
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, sans-serif !important;
+}
 
-  h1,
-  h2,
-  h3,
-  h4,
-  .font-display {
-    font-family: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
-  }
+.font-display,
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-jakarta), -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif !important;
+}
 
-  button:not(:disabled),
-  [role="button"]:not(:disabled),
-  label.cursor-pointer {
-    transition: transform 0.14s cubic-bezier(0.2, 0, 0, 1),
-      box-shadow 0.2s ease, background-color 0.2s ease, border-color 0.2s ease,
-      color 0.2s ease;
-  }
+button:not(:disabled),
+[role="button"]:not(:disabled),
+label.cursor-pointer {
+  transition: transform 0.14s cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 0.2s ease, background-color 0.2s ease, border-color 0.2s ease,
+    color 0.2s ease;
+}
 
-  button:not(:disabled):active,
-  [role="button"]:not(:disabled):active,
-  label.cursor-pointer:active {
-    transform: scale(0.97);
-  }
+button:not(:disabled):active,
+[role="button"]:not(:disabled):active,
+label.cursor-pointer:active {
+  transform: scale(0.97);
 }
 
 @keyframes pulse-fast {

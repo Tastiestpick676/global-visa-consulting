@@ -3,7 +3,12 @@
 
 import { ReactNode, Suspense, useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+  usePathname,
+  useRouter,
+  useSearchParams,
+  redirect,
+} from "next/navigation";
 import {
   ShieldCheck,
   LayoutDashboard,
@@ -92,7 +97,6 @@ const staffNavigation = [
   },
 ];
 
-// Skeleton Estructural para feedback visual instantáneo y LCP óptimo en Lighthouse
 export function DashboardContentSkeleton() {
   return (
     <div className="space-y-6 animate-skeleton" aria-busy="true" aria-live="polite">
@@ -193,12 +197,13 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
   const [notifOpen, setNotifOpen] = useState(false);
   const notifContainerRef = useRef<HTMLDivElement>(null);
 
+  const isStaff = profile?.role === "admin" || profile?.role === "advisor";
+
   useEffect(() => {
     setMobileMenuOpen(false);
     setNotifOpen(false);
   }, [pathname]);
 
-  // 5. Cerrar menú de Notificaciones y Drawer móvil con tecla Escape o clic afuera
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -225,8 +230,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
     };
   }, [notifOpen]);
 
-  const isStaff = profile?.role === "admin" || profile?.role === "advisor";
-
   useEffect(() => {
     if (!user) return;
     const targets = isStaff ? [user.uid, "STAFF"] : [user.uid];
@@ -250,6 +253,15 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
 
     return () => unsub();
   }, [user, isStaff]);
+
+  // GUARDIA GLOBAL NATIVO CON redirect() DE NEXT.JS
+  if (!loading && !user) {
+    redirect("/login");
+  }
+
+  if (!loading && profile && pathname.startsWith("/dashboard/admin") && !isStaff) {
+    redirect("/dashboard");
+  }
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
@@ -300,7 +312,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
   const renderSidebarContent = (onNavigate?: () => void) => (
     <>
       <div className="space-y-6 overflow-y-auto pr-1">
-        {/* Cabecera de la Sidebar: Logo + Botón de Ocultar Sidebar adentro de la misma Sidebar */}
         <div className="flex items-center justify-between gap-2">
           <Link
             href={
@@ -328,7 +339,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
             </div>
           </Link>
 
-          {/* 4. Botón de Ocultar Sidebar ubicado DENTRO de la propia Sidebar (En PC) */}
           {!onNavigate && (
             <button
               type="button"
@@ -341,7 +351,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
             </button>
           )}
 
-          {/* Botón cerrar en Móvil */}
           {onNavigate && (
             <button
               type="button"
@@ -354,7 +363,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
           )}
         </div>
 
-        {/* Tarjeta de Rol o Plan (con Skeleton si aún está cargando) */}
         <div className="rounded-2xl bg-white/[0.04] p-4 border border-white/10 space-y-1.5">
           <div className="flex items-center justify-between text-[11px] font-medium text-white/60">
             <span>{!showClientMenu ? "Rol Operativo" : "Plan Contratado"}</span>
@@ -390,7 +398,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
           )}
         </div>
 
-        {/* Menú de Navegación (o Skeleton si aún carga el rol) */}
         {loading ? (
           <div className="space-y-2 pt-2 animate-skeleton">
             {[1, 2, 3, 4, 5].map((i) => (
@@ -447,7 +454,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         )}
       </div>
 
-      {/* Pie de Sidebar */}
       <div className="pt-4 border-t border-white/10 space-y-2.5 shrink-0">
         {isStaff && (
           <div
@@ -542,7 +548,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-brand-platinum/50 flex font-sans">
-      {/* Sidebar en Desktop */}
       <aside
         className={`hidden lg:flex h-screen sticky top-0 flex-col justify-between bg-brand-charcoal text-brand-white shrink-0 select-none transition-all duration-300 ease-in-out overflow-hidden ${
           desktopSidebarOpen
@@ -555,7 +560,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      {/* Drawer en Móvil */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
@@ -568,11 +572,9 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {/* Contenido Principal (Renderiza el Header de inmediato para LCP < 0.8s en Lighthouse) */}
       <main className="flex-1 flex flex-col min-w-0">
         <header className="sticky top-0 z-40 bg-brand-white/95 backdrop-blur-md border-b border-brand-platinum px-4 sm:px-6 lg:px-10 py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            {/* Botón Hamburguesa Móvil */}
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
@@ -582,7 +584,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
               <Menu className="h-5 w-5" />
             </button>
 
-            {/* Solo aparece en el Header cuando la Sidebar de PC está oculta para poder reabrirla */}
             {!desktopSidebarOpen && (
               <button
                 type="button"
@@ -605,7 +606,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
                   ? "Consola de Asesor — Gestión de Casos"
                   : application?.visaType || "Portal de Gestión Migratoria"}
               </h1>
-              {/* Contraste ajustado a text-brand-charcoal/75 para cumplir WCAG AA 4.5:1 en Lighthouse */}
               <p className="text-[11px] sm:text-xs text-brand-charcoal/75 truncate">
                 {!showClientMenu || pathname.startsWith("/dashboard/admin") ? (
                   <span>
@@ -643,7 +643,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
               </div>
             )}
 
-            {/* Centro de Notificaciones con cierre al hacer clic afuera o presionar Escape */}
             <div ref={notifContainerRef} className="relative">
               <button
                 type="button"
