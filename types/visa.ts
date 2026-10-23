@@ -1,34 +1,21 @@
 // types/visa.ts
+
 export type DestinationCountry = "USA" | "JAPAN";
 
 export type PlanTier = "Essential" | "Priority Pro" | "VIP";
 
-export type UserRole = "admin" | "advisor" | "client";
+export type UserRole = "client" | "advisor" | "admin";
 
 export type ApplicationStatus =
-  | "onboarding_pending"
-  | "in_legal_review"
+  | "onboarding"
+  | "form_in_progress"
   | "documents_pending"
+  | "legal_review"
   | "ready_for_consulate"
   | "approved"
   | "rejected";
 
-export interface UserProfile {
-  uid: string;
-  email: string;
-  firstName?: string;
-  lastName?: string;
-  fullName: string;
-  phone?: string;
-  photoUrl?: string;
-  bioOrTitle?: string;
-  role: UserRole;
-  destination: DestinationCountry;
-  planTier: PlanTier;
-  bookingUrl?: string;
-  createdAt: string;
-  updatedAt?: string;
-}
+export type DocumentStatus = "pending" | "uploaded" | "verified" | "rejected";
 
 export interface PreApprovedUser {
   email: string;
@@ -37,103 +24,61 @@ export interface PreApprovedUser {
   role: UserRole;
   destination: DestinationCountry;
   planTier: PlanTier;
-  bookingUrl?: string;
-  assignedAdvisorId?: string;
-  assignedAdvisorName?: string;
-  createdBy: string;
+  createdBy?: string;
   createdAt: string;
 }
 
-export interface SmartIntakeData {
+export interface UserProfile {
+  uid: string;
+  email: string;
   fullName: string;
-  nationalId: string;
-  maritalStatus: "Soltero/a" | "Casado/a" | "Unión Libre" | "Divorciado/a" | "Viudo/a";
-  homeAddress: string;
-  cityAndState: string;
-  mobilePhone: string;
-  purposeOfTrip: string;
-  estimatedArrivalDate: string;
-  stayDurationDays: string;
-  tripFinancier: "Yo mismo (Recursos propios)" | "Un familiar / Pareja (Con Carta de Garantía)" | "Empresa patrocinadora";
-  currentOccupation: string;
-  companyOrEmployerName: string;
-  monthlyIncomeLocal: string;
-  partnerOrParentsOccupation?: string;
-  japanPortOfEntry?: string;
-  japanAirlineOrFlight?: string;
-  japanCitiesToVisit?: string;
-  hasGuarantorInJapan?: "no" | "yes";
-  guarantorDetails?: string;
-  previousStayInJapan?: string;
-  socialMediaHandles?: string;
-  parentsFullNamesAndDob?: string;
-  hasRelativesInUS?: "no" | "yes";
-  relativesInUSDetails?: string;
-  previousJobsAndEducationSummary?: string;
-  hasPreviousVisaRefusal?: "no" | "yes";
-  refusalExplanation?: string;
-  additionalNotes?: string;
+  phone?: string;
+  photoUrl?: string;
+  photoURL?: string;
+  role: UserRole;
+  destination?: DestinationCountry;
+  planTier?: PlanTier;
+  bookingUrl?: string;
+  createdAt: string;
+  updatedAt?: string;
 }
 
-export interface VaultDocument {
-  docId: string;
+export interface VaultDocumentItem {
+  id: string;
   title: string;
-  fileName: string;
-  fileUrl: string;
-  storagePath: string;
-  fileSize: number;
-  uploadedAt: string;
-  status: "uploaded" | "verified" | "rejected";
-  advisorFeedback?: string; // Motivo exacto de observación/rechazo escrito por el asesor
+  description: string;
+  required: boolean;
+  status: DocumentStatus;
+  fileName?: string;
+  fileUrl?: string;
+  storagePath?: string;
+  feedback?: string;
+  uploadedAt?: string;
+  reviewedBy?: string;
 }
 
 export interface OfficialDeliverableItem {
   id: string;
-  title: string;
-  category:
-    | "Confirmación DS-160"
-    | "Cita Consular / CAS"
-    | "Formulario Embajada Japón"
-    | "Schedule of Stay (Itinerario)"
-    | "Otro Documento Oficial";
+  label: string;
+  description?: string;
   fileName: string;
   fileUrl: string;
-  storagePath: string;
-  fileSize: number;
+  storagePath?: string;
   uploadedBy: string;
   uploadedAt: string;
 }
 
-export interface ConsularResourceItem {
+export interface ScheduledMeetingItem {
   id: string;
   title: string;
-  description: string;
-  category:
-    | "Guia"
-    | "Documento Oficial"
-    | "Checklist"
-    | "Tip Consular"
-    | "Video YouTube"
-    | "Instagram / Post";
-  url?: string;
-  storagePath?: string;
-  destination: DestinationCountry | "ALL";
-  updatedAt: string;
-}
-
-export interface CaseMeetingRecord {
-  id: string;
-  date: string;
-  title: string;
-  notes: string;
+  dateTime: string;
+  meetUrl: string;
   advisorName: string;
-  attachmentName?: string;
-  attachmentUrl?: string;
-  attachmentStoragePath?: string;
+  notes?: string;
+  completed?: boolean;
   createdAt: string;
 }
 
-// 3. Registro de Auditoría Inmutable (Audit Trail por Expediente)
 export interface AuditLogEntry {
   id: string;
   action: string;
@@ -143,10 +88,9 @@ export interface AuditLogEntry {
   timestamp: string;
 }
 
-// 2. Centro de Notificaciones Internas en Tiempo Real
 export interface AppNotification {
   id: string;
-  recipientId: string; // UID del usuario específico o "STAFF" para asesores/admins
+  recipientId: string;
   title: string;
   message: string;
   link?: string;
@@ -154,28 +98,52 @@ export interface AppNotification {
   createdAt: string;
 }
 
-export interface ConsularSessionData {
-  preferredDate?: string;
-  preferredTimeSlot?: string;
-  focusConcerns?: string;
-  status?: "unscheduled" | "requested" | "confirmed" | "completed";
-  bookingUrl?: string;
-  meetingLink?: string;
-  calendarEventId?: string;
-  calendarHtmlLink?: string;
-  confirmedDateTime?: string;
-  advisorNotes?: string;
-  officialDeliverableUrl?: string;
-  officialDeliverableTitle?: string;
-}
+export interface SmartFormData {
+  // Datos Personales &Contacto
+  fullName?: string;
+  nationalId?: string;
+  birthDate?: string;
+  maritalStatus?: string;
+  mobilePhone?: string;
+  homeAddress?: string;
+  city?: string;
 
-export interface HistoricalCaseSummary {
-  caseId: string;
-  visaType: string;
-  destination: DestinationCountry;
-  status: ApplicationStatus;
-  closedAt: string;
-  advisorName?: string;
+  // Pasaporte
+  passportNumber?: string;
+  passportIssueDate?: string;
+  passportExpiryDate?: string;
+
+  // Propósito del Viaje
+  intendedArrivalDate?: string;
+  intendedStayDuration?: string;
+  destinationCities?: string;
+  accommodationDetails?: string;
+  tripPayer?: string;
+  travelCompanions?: string;
+
+  // Arraigo Laboral & Financiero
+  currentOccupation?: string;
+  employerOrBusinessName?: string;
+  jobTitle?: string;
+  monthlyIncomeCop?: string;
+  yearsInCurrentActivity?: string;
+  workDescription?: string;
+
+  // Historial Migratorio & Familia
+  previousUsaVisa?: string;
+  previousVisaRefusal?: string;
+  refusalExplanation?: string;
+  internationalTravelHistory?: string;
+  relativesInDestination?: string;
+  securityBackgroundDeclaration?: string;
+
+  // Específicos Japón (Schedule of Stay)
+  japanEntryPort?: string;
+  japanAirlineOrFlight?: string;
+  japanDailyItinerarySummary?: string;
+  japanGuarantorOrInviter?: string;
+
+  [key: string]: any;
 }
 
 export interface VisaApplication {
@@ -183,10 +151,9 @@ export interface VisaApplication {
   userId: string;
   clientName?: string;
   clientEmail?: string;
-  clientPhone?: string;
   destination: DestinationCountry;
-  planTier?: PlanTier;
   visaType: string;
+  planTier: PlanTier;
   status: ApplicationStatus;
   currentStep: number;
   progressPercentage: number;
@@ -194,15 +161,57 @@ export interface VisaApplication {
   assignedAdvisorName?: string;
   assignedAdvisorEmail?: string;
   assignedAdvisorBookingUrl?: string;
-  formUnlockedByAdvisor?: boolean; // Permite al asesor desbloquear temporalmente el formulario en etapas avanzadas
-  isDecommissioned?: boolean;
-  decommissionedAt?: string;
+  consularAttempt?: number;
+  archivedAttempts?: {
+    attemptNumber: number;
+    archivedAt: string;
+    finalStatus: ApplicationStatus;
+    summaryNote?: string;
+  }[];
+  formData: SmartFormData;
+  documents: VaultDocumentItem[];
   officialDeliverables?: OfficialDeliverableItem[];
-  meetings?: CaseMeetingRecord[];
+  meetings?: ScheduledMeetingItem[];
   auditLogs?: AuditLogEntry[];
-  historicalCases?: HistoricalCaseSummary[];
-  formData?: Partial<SmartIntakeData>;
-  documents?: Record<string, VaultDocument>;
-  consularSession?: ConsularSessionData;
+  notifications?: AppNotification[];
+  advisorNotes?: string;
   updatedAt: string;
+  createdAt: string;
+}
+
+export interface ConsularResourceItem {
+  id: string;
+  title: string;
+  description: string;
+  category: "Video YouTube" | "Instagram / Post" | "Guia" | "Tip Consular";
+  destination: DestinationCountry | "ALL";
+  url?: string;
+  storagePath?: string;
+  updatedAt: string;
+}
+
+// ============================================================================
+// TIPOS PARA LA BITÁCORA MAESTRA DE AUDITORÍA & LOGS SIEM (SOLO ADMINS)
+// ============================================================================
+
+export type SystemLogCategory =
+  | "SECURITY_AUTH"
+  | "CASE_TRACEABILITY"
+  | "PII_VAULT"
+  | "IAM_GOVERNANCE";
+
+export type SystemLogOutcome = "SUCCESS" | "WARNING" | "CRITICAL" | "INFO";
+
+export interface SystemLogEntry {
+  id: string;
+  timestamp: string;
+  category: SystemLogCategory;
+  eventType: string;
+  outcome: SystemLogOutcome;
+  actorEmail: string;
+  actorName: string;
+  actorRole: UserRole | "anonymous";
+  targetResource?: string;
+  details: string;
+  metadata?: string;
 }

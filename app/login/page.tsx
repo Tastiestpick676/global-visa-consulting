@@ -5,8 +5,8 @@ import { useState, useEffect } from "react";
 import { useRouter, redirect } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 import {
-  ShieldCheck,
   Lock,
   ArrowRight,
   AlertCircle,
@@ -40,17 +40,24 @@ export default function LoginPage() {
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
-const { user, profile, loading, signIn, signInWithGoogle, requestPasswordReset } = useAuth();
-const router = useRouter();
+  const {
+    user,
+    profile,
+    loading,
+    signIn,
+    signInWithGoogle,
+    requestPasswordReset,
+  } = useAuth();
+  const router = useRouter();
 
-// Si el usuario ya tiene sesión abierta y hace clic en "Portal Clientes", entra directo al Dashboard
-if (!loading && user) {
-  const targetUrl =
-    profile?.role === "admin" || profile?.role === "advisor"
-      ? "/dashboard/admin?tab=gobernanza"
-      : "/dashboard";
-  redirect(targetUrl);
-}
+  // Si el usuario ya tiene sesión activa, redirige directamente a su panel correspondiente
+  if (!loading && user) {
+    const targetUrl =
+      profile?.role === "admin" || profile?.role === "advisor"
+        ? "/dashboard/admin?tab=gobernanza"
+        : "/dashboard";
+    redirect(targetUrl);
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -202,19 +209,14 @@ if (!loading && user) {
 
   return (
     <div className="min-h-screen bg-brand-white grid grid-cols-1 lg:grid-cols-12 font-sans">
-      {/* Columna Izquierda: Branding y Seguridad (aside semántico) */}
+      {/* Columna Izquierda: Branding y Seguridad con el nuevo Logo */}
       <aside
         aria-label="Información de seguridad del portal"
         className="hidden lg:flex lg:col-span-5 bg-brand-charcoal text-brand-white p-12 flex-col justify-between relative overflow-hidden"
       >
         <div className="relative z-10">
-          <Link href="/" className="inline-flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red text-brand-white shadow-md shadow-brand-red/20">
-              <ShieldCheck className="h-5 w-5" />
-            </div>
-            <span className="font-display text-lg font-bold tracking-tight">
-              GLOBAL VISA CONSULTING
-            </span>
+          <Link href="/" className="inline-block focus:outline-none">
+            <BrandLogo theme="dark" size="md" />
           </Link>
 
           <div className="mt-20 space-y-5">
@@ -226,7 +228,9 @@ if (!loading && user) {
               Control total de tu expediente migratorio en tiempo real.
             </h1>
             <p className="text-sm text-white/80 leading-relaxed max-w-md">
-              Toda tu información personal (PII) está protegida bajo reglas de aislamiento criptográfico, detección de fuerza bruta y verificación de identidad.
+              Toda tu información personal (PII) está protegida bajo reglas de
+              aislamiento criptográfico, detección de fuerza bruta y
+              verificación de identidad.
             </p>
           </div>
         </div>
@@ -237,14 +241,22 @@ if (!loading && user) {
             <span>Seguridad Nivel Bancario • Zero-Trust</span>
           </div>
           <p className="text-xs text-white/75">
-            Monitoreo activo contra intentos fallidos, enlaces de recuperación con expiración automática y rotación de sesión cada 8 horas.
+            Monitoreo activo contra intentos fallidos, enlaces de recuperación
+            con expiración automática y rotación de sesión cada 8 horas.
           </p>
         </div>
       </aside>
 
-      {/* Columna Derecha: Landmark <main> requerido por Lighthouse */}
+      {/* Columna Derecha: Landmark <main> */}
       <main className="lg:col-span-7 flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-md space-y-7">
+          {/* Logo visible en dispositivos móviles */}
+          <div className="lg:hidden pb-2">
+            <Link href="/" className="inline-block focus:outline-none">
+              <BrandLogo theme="light" size="md" />
+            </Link>
+          </div>
+
           {isLocked && (
             <div
               role="alert"
@@ -260,7 +272,9 @@ if (!loading && user) {
                 </span>
               </div>
               <p className="text-xs text-brand-charcoal/85 leading-relaxed">
-                Por protocolos de seguridad contra accesos no autorizados, hemos bloqueado temporalmente los intentos de inicio de sesión tras detectar múltiples fallos consecutivos.
+                Por protocolos de seguridad contra accesos no autorizados, hemos
+                bloqueado temporalmente los intentos de inicio de sesión tras
+                detectar múltiples fallos consecutivos.
               </p>
             </div>
           )}
@@ -272,7 +286,8 @@ if (!loading && user) {
                   Acceso al Portal
                 </h2>
                 <p className="text-xs sm:text-sm text-brand-charcoal/75">
-                  Ingresa con tus credenciales autorizadas para consultar el avance de tu trámite.
+                  Ingresa con tus credenciales autorizadas para consultar el
+                  avance de tu trámite.
                 </p>
               </div>
 
@@ -286,7 +301,9 @@ if (!loading && user) {
                     <span>Cuenta No Provisionada</span>
                   </div>
                   <p className="text-xs text-white/85 leading-relaxed">
-                    Este correo aún no tiene un expediente activo en <strong>Global Visa Consulting</strong>. El acceso al portal es exclusivo para clientes que ya han iniciado su servicio.
+                    Este correo aún no tiene un expediente activo en{" "}
+                    <strong>Global Visa Consulting</strong>. El acceso al portal
+                    es exclusivo para clientes que ya han iniciado su servicio.
                   </p>
                   <a
                     href={getWhatsAppUrl(
@@ -312,14 +329,17 @@ if (!loading && user) {
                 </div>
               )}
 
-              {/* Botón de Google */}
               <button
                 type="button"
                 onClick={handleGoogleLogin}
                 disabled={submitting || isLocked}
                 className="w-full flex items-center justify-center gap-3 rounded-full border border-brand-charcoal/15 bg-brand-white px-6 py-3.5 text-xs sm:text-sm font-semibold text-brand-charcoal shadow-2xs hover:bg-brand-platinum/60 transition-all disabled:opacity-50"
               >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
                   <path
                     fill="#4285F4"
                     d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -340,7 +360,6 @@ if (!loading && user) {
                 <span>Continuar con Google</span>
               </button>
 
-              {/* Divisor con contraste WCAG AA mejorado (text-brand-charcoal/75) */}
               <div className="relative flex py-1 items-center">
                 <div className="flex-grow border-t border-brand-platinum" />
                 <span className="shrink mx-4 text-[11px] font-semibold uppercase tracking-widest text-brand-charcoal/75">
@@ -402,7 +421,6 @@ if (!loading && user) {
                       placeholder="••••••••"
                       className="h-12 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 pl-4 pr-12 text-sm text-brand-charcoal placeholder:text-brand-charcoal/50 focus:bg-brand-white focus:border-brand-red focus:outline-none disabled:opacity-50"
                     />
-                    {/* Botón accesible con aria-label y área táctil de 36x36px (>= 24x24px requerido por Lighthouse) */}
                     <button
                       type="button"
                       onClick={() => setShowPassword((prev) => !prev)}
@@ -464,7 +482,9 @@ if (!loading && user) {
                   Restablecer o Crear Contraseña
                 </h2>
                 <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
-                  Si tu cuenta fue creada por nuestro equipo o si olvidaste tu clave, ingresa tu correo autorizado para recibir un enlace seguro de configuración.
+                  Si tu cuenta fue creada por nuestro equipo o si olvidaste tu
+                  clave, ingresa tu correo autorizado para recibir un enlace
+                  seguro de configuración.
                 </p>
               </div>
 
@@ -478,10 +498,15 @@ if (!loading && user) {
                     <span>Solicitud Procesada con Seguridad</span>
                   </div>
                   <p className="text-xs text-emerald-950/85 leading-relaxed">
-                    Si el correo <strong>{email}</strong> se encuentra registrado y autorizado en nuestro sistema, recibirás en los próximos minutos un enlace criptográfico de un solo uso para configurar tu contraseña.
+                    Si el correo <strong>{email}</strong> se encuentra
+                    registrado y autorizado en nuestro sistema, recibirás en los
+                    próximos minutos un enlace criptográfico de un solo uso para
+                    configurar tu contraseña.
                   </p>
                   <p className="text-[11px] text-emerald-900/75">
-                    Por seguridad, el enlace expirará automáticamente tras su uso o después del tiempo límite establecido. Revisa también tu bandeja de Spam o Promociones.
+                    Por seguridad, el enlace expirará automáticamente tras su
+                    uso o después del tiempo límite establecido. Revisa también
+                    tu bandeja de Spam o Promociones.
                   </p>
                 </div>
               ) : (
@@ -526,7 +551,6 @@ if (!loading && user) {
             </div>
           )}
 
-          {/* Enlace inferior con contraste WCAG AA (text-brand-charcoal/75) */}
           <div className="pt-4 border-t border-brand-platinum text-center">
             <Link
               href="/"

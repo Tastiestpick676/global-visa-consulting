@@ -4,13 +4,10 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  verifyPasswordResetCode,
-  confirmPasswordReset,
-} from "firebase/auth";
+import { verifyPasswordResetCode, confirmPasswordReset } from "firebase/auth";
 import { auth } from "@/lib/firebase/config";
+import { BrandLogo } from "@/components/ui/BrandLogo";
 import {
-  ShieldCheck,
   Lock,
   CheckCircle2,
   AlertCircle,
@@ -116,13 +113,8 @@ function ResetPasswordContent() {
     <main className="min-h-screen bg-brand-platinum/50 flex flex-col justify-center items-center p-6 font-sans">
       <div className="w-full max-w-md space-y-6">
         <div className="flex justify-center">
-          <Link href="/" className="inline-flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red text-brand-white shadow-md shadow-brand-red/20">
-              <ShieldCheck className="h-5 w-5" />
-            </div>
-            <span className="font-display text-lg font-bold tracking-tight text-brand-charcoal">
-              GLOBAL VISA CONSULTING
-            </span>
+          <Link href="/" className="inline-block focus:outline-none">
+            <BrandLogo theme="light" size="md" />
           </Link>
         </div>
 
@@ -137,7 +129,9 @@ function ResetPasswordContent() {
                   Enlace Expirado o Utilizado
                 </h1>
                 <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
-                  Por estándares de seguridad bancaria, los enlaces de recuperación son de <strong>un solo uso</strong> y tienen un tiempo máximo de expiración.
+                  Por estándares de seguridad bancaria, los enlaces de
+                  recuperación son de <strong>un solo uso</strong> y tienen un
+                  tiempo máximo de expiración.
                 </p>
               </div>
               <div className="pt-2">
@@ -163,7 +157,8 @@ function ResetPasswordContent() {
                   Tu contraseña ha sido cambiada exitosamente
                 </h1>
                 <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
-                  El enlace temporal ha sido invalidado automáticamente. Ya puedes iniciar sesión en tu portal con tu nueva clave privada.
+                  El enlace temporal ha sido invalidado automáticamente. Ya
+                  puedes iniciar sesión en tu portal con tu nueva clave privada.
                 </p>
               </div>
 
@@ -187,7 +182,9 @@ function ResetPasswordContent() {
                 </h1>
                 <p className="text-xs text-brand-charcoal/75">
                   Cuenta verificada:{" "}
-                  <strong className="text-brand-charcoal">{accountEmail}</strong>
+                  <strong className="text-brand-charcoal">
+                    {accountEmail}
+                  </strong>
                 </p>
               </div>
 
@@ -287,7 +284,8 @@ function ResetPasswordContent() {
                           : "text-brand-charcoal/70"
                       }
                     >
-                      {hasNumberOrSymbol ? "✓" : "•"} Al menos 1 número o símbolo
+                      {hasNumberOrSymbol ? "✓" : "•"} Al menos 1 número o
+                      símbolo
                     </span>
                     <span
                       className={

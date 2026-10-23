@@ -7,6 +7,7 @@ import {
   DashboardLayout,
   DashboardContentSkeleton,
 } from "@/components/dashboard/DashboardLayout";
+import { BrandLogoIcon } from "@/components/ui/BrandLogo";
 import { useAuth } from "@/context/AuthContext";
 import { db, storage } from "@/lib/firebase/config";
 import {
@@ -28,6 +29,9 @@ import {
   DestinationCountry,
   PlanTier,
   PreApprovedUser,
+  SystemLogCategory,
+  SystemLogEntry,
+  SystemLogOutcome,
   UserProfile,
   UserRole,
   VisaApplication,
@@ -36,6 +40,7 @@ import {
   buildAuditLogEntry,
   calculateApplicationMetrics,
   formatDisplayName,
+  recordSystemLog,
   sendInternalNotification,
 } from "@/lib/firebase/db";
 import {
@@ -59,6 +64,13 @@ import {
   UserCircle,
   FolderKanban,
   X,
+  TerminalSquare,
+  Search,
+  Download,
+  Lock,
+  FolderLock,
+  Activity,
+  ShieldCheck,
 } from "lucide-react";
 
 const inputBaseClass =
@@ -76,6 +88,7 @@ function AdminDashboardContent() {
     "clientes",
     "sala-cms",
     "equipo",
+    "logs",
   ];
   const activeTab = validTabs.includes(rawTab) ? rawTab : "gobernanza";
 
@@ -86,7 +99,15 @@ function AdminDashboardContent() {
   const [consularResources, setConsularResources] = useState<
     ConsularResourceItem[]
   >([]);
+  const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+
+  // Filtros para el Centro de Logs & Auditoría (Tab = logs)
+  const [logSubTab, setLogSubTab] = useState<"ALL" | SystemLogCategory>("ALL");
+  const [logOutcomeFilter, setLogOutcomeFilter] = useState<
+    "ALL" | SystemLogOutcome
+  >("ALL");
+  const [logSearchQuery, setLogSearchQuery] = useState("");
 
   // Formulario Alta de Cliente
   const [clientEmail, setClientEmail] = useState("");
@@ -101,7 +122,7 @@ function AdminDashboardContent() {
   const [staffName, setStaffName] = useState("");
   const [staffRole, setStaffRole] = useState<UserRole>("advisor");
 
-  // Estudio de Publicación Fintech Unificado a 3 formatos (Recurso Web/Redes, Subir PDF/Guía, Nota Legal)
+  // Estudio de Publicación Fintech Unificado a 3 formatos
   const [postFormat, setPostFormat] = useState<"web" | "file" | "note">("web");
   const [resTitle, setResTitle] = useState("");
   const [resDesc, setResDesc] = useState("");
@@ -116,13 +137,11 @@ function AdminDashboardContent() {
 
   const isStaff = profile?.role === "admin" || profile?.role === "advisor";
 
-  // 1. Limpiar alertas automáticamente al cambiar de pestaña en el Sidebar
   useEffect(() => {
     setFeedback("");
     setErrorMsg("");
   }, [activeTab]);
 
-  // 2. Auto-ocultar las alertas después de 5 segundos
   useEffect(() => {
     if (!feedback && !errorMsg) return;
     const timer = setTimeout(() => {
@@ -141,9 +160,11 @@ function AdminDashboardContent() {
       setAllowedList(allowed);
 
       const usersSnap = await getDocs(collection(db, "users"));
+      const allUsers: UserProfile[] = [];
       const staffUids = new Set<string>();
       usersSnap.forEach((d) => {
         const u = d.data() as UserProfile;
+        allUsers.push(u);
         if (u.role === "admin" || u.role === "advisor") {
           staffUids.add(u.uid);
         }
@@ -172,6 +193,105 @@ function AdminDashboardContent() {
         );
         setConsularResources(resources);
       } catch {}
+
+      // Consolidación Inteligente de Logs (system_logs + auditLogs de Casos + Eventos IAM/Auth)
+      const unifiedLogs: SystemLogEntry[] = [];
+      const seenIds = new Set<string>();
+
+      try {
+        const sysLogsSnap = await getDocs(collection(db, "system_logs"));
+        sysLogsSnap.forEach((d) => {
+          const item = d.data() as SystemLogEntry;
+          unifiedLogs.push(item);
+          seenIds.add(item.id);
+        });
+      } catch {}
+
+      // Extraer Trazabilidad de Expedientes & Bóveda PII desde applications.auditLogs
+      apps.forEach((app) => {
+        const clientLabel = `${formatDisplayName(
+          app.formData?.fullName || app.clientName || "Cliente"
+        )} (${app.destination})`;
+
+        (app.auditLogs || []).forEach((aLog) => {
+          if (seenIds.has(aLog.id)) return;
+          seenIds.add(aLog.id);
+
+          const lowerAction = (aLog.action || "").toLowerCase();
+          const isVaultEvent =
+            lowerAction.includes("bóveda") ||
+            lowerAction.includes("documento") ||
+            lowerAction.includes("purga") ||
+            lowerAction.includes("entregable") ||
+            lowerAction.includes("pdf");
+
+          const isCritical =
+            lowerAction.includes("rechaz") || lowerAction.includes("purga");
+
+          unifiedLogs.push({
+            id: aLog.id,
+            timestamp: aLog.timestamp,
+            category: isVaultEvent ? "PII_VAULT" : "CASE_TRACEABILITY",
+            eventType: aLog.action,
+            outcome: isCritical ? "WARNING" : "SUCCESS",
+            actorEmail: aLog.actorName,
+            actorName: formatDisplayName(aLog.actorName),
+            actorRole: aLog.actorRole,
+            targetResource: clientLabel,
+            details: aLog.details,
+          });
+        });
+      });
+
+      // Extraer Eventos de Autenticación / Primer Ingreso desde users
+      allUsers.forEach((u) => {
+        const synthId = `auth_init_${u.uid}`;
+        if (!seenIds.has(synthId) && u.createdAt) {
+          seenIds.add(synthId);
+          unifiedLogs.push({
+            id: synthId,
+            timestamp: u.createdAt,
+            category: "SECURITY_AUTH",
+            eventType: "Autenticación & Provisionamiento Token",
+            outcome: "SUCCESS",
+            actorEmail: u.email,
+            actorName: formatDisplayName(u.fullName),
+            actorRole: u.role,
+            targetResource: "Firebase Auth • Token 8h",
+            details: `Sesión verificada y perfil sincronizado con rol [${u.role.toUpperCase()}].`,
+          });
+        }
+      });
+
+      // Extraer Eventos de Gobernanza IAM desde allowed_emails
+      allowed.forEach((a) => {
+        const iamId = `iam_allow_${a.email}`;
+        if (!seenIds.has(iamId) && a.createdAt) {
+          seenIds.add(iamId);
+          unifiedLogs.push({
+            id: iamId,
+            timestamp: a.createdAt,
+            category: "IAM_GOVERNANCE",
+            eventType:
+              a.role === "client"
+                ? "Alta de Cliente en Lista Blanca"
+                : `Autorización de Staff (${a.role.toUpperCase()})`,
+            outcome: "INFO",
+            actorEmail: a.createdBy || "admin",
+            actorName: a.createdBy || "Admin",
+            actorRole: "admin",
+            targetResource: `${formatDisplayName(a.fullName)} (${a.email})`,
+            details: `Acceso habilitado para destino ${
+              a.destination || "USA"
+            } • Plan ${a.planTier || "Essential"}.`,
+          });
+        }
+      });
+
+      unifiedLogs.sort((a, b) =>
+        (b.timestamp || "").localeCompare(a.timestamp || "")
+      );
+      setSystemLogs(unifiedLogs);
     } catch {
       setErrorMsg("Error al sincronizar datos del Backoffice.");
     } finally {
@@ -210,6 +330,19 @@ function AdminDashboardContent() {
         currentStep: metrics.currentStep,
         auditLogs: [audit, ...(app.auditLogs || [])],
         updatedAt: new Date().toISOString(),
+      });
+
+      await recordSystemLog({
+        category: "CASE_TRACEABILITY",
+        eventType: "Reclamo de Expediente en Bolsa",
+        outcome: "SUCCESS",
+        actorEmail: profile.email,
+        actorName: cleanAdvisorName,
+        actorRole: profile.role,
+        targetResource: `${formatDisplayName(
+          app.formData?.fullName || app.clientName
+        )} (${app.destination})`,
+        details: `${cleanAdvisorName} asumió la titularidad jurídica del expediente.`,
       });
 
       await sendInternalNotification(
@@ -258,7 +391,6 @@ function AdminDashboardContent() {
         finalUrl = await getDownloadURL(fileRef);
       }
 
-      // Detección inteligente de categoría según el enlace cuando es Recurso Web / Redes
       let detectedCategory: ConsularResourceItem["category"] = "Tip Consular";
       if (postFormat === "file") {
         detectedCategory = "Guia";
@@ -286,6 +418,18 @@ function AdminDashboardContent() {
       };
 
       await setDoc(doc(db, "consular_resources", id), newRes);
+
+      await recordSystemLog({
+        category: "PII_VAULT",
+        eventType: "Publicación en Sala Consular",
+        outcome: "SUCCESS",
+        actorEmail: profile.email,
+        actorName: profile.fullName,
+        actorRole: profile.role,
+        targetResource: `Sala Consular (${resDest})`,
+        details: `Recurso publicado: "${newRes.title}" [${detectedCategory}].`,
+      });
+
       setFeedback(
         `¡Publicación "${newRes.title}" publicada en la Sala Consular!`
       );
@@ -317,6 +461,20 @@ function AdminDashboardContent() {
         } catch {}
       }
       await deleteDoc(doc(db, "consular_resources", item.id));
+
+      if (profile) {
+        await recordSystemLog({
+          category: "PII_VAULT",
+          eventType: "Eliminación de Recurso Editorial",
+          outcome: "WARNING",
+          actorEmail: profile.email,
+          actorName: profile.fullName,
+          actorRole: profile.role,
+          targetResource: item.title,
+          details: `Se eliminó la publicación y su archivo asociado en Firebase Storage.`,
+        });
+      }
+
       await fetchBackofficeData();
       setFeedback(
         "Publicación y archivo de Storage eliminados correctamente."
@@ -348,6 +506,18 @@ function AdminDashboardContent() {
       };
 
       await setDoc(doc(db, "allowed_emails", cleanEmail), payload);
+
+      await recordSystemLog({
+        category: "IAM_GOVERNANCE",
+        eventType: "Provisionamiento de Nuevo Cliente",
+        outcome: "SUCCESS",
+        actorEmail: profile?.email || "staff",
+        actorName: profile?.fullName || "Staff",
+        actorRole: profile?.role || "admin",
+        targetResource: `${payload.fullName} (${cleanEmail})`,
+        details: `Cliente autorizado para ruta ${clientDestination} • Plan ${clientPlan}.`,
+      });
+
       setFeedback(`Cliente ${payload.fullName} registrado con éxito.`);
       setClientEmail("");
       setClientName("");
@@ -382,6 +552,20 @@ function AdminDashboardContent() {
       };
 
       await setDoc(doc(db, "allowed_emails", cleanEmail), payload);
+
+      await recordSystemLog({
+        category: "IAM_GOVERNANCE",
+        eventType: `Alta de Personal Interno (${staffRole.toUpperCase()})`,
+        outcome: "SUCCESS",
+        actorEmail: profile.email,
+        actorName: profile.fullName,
+        actorRole: profile.role,
+        targetResource: `${payload.fullName} (${cleanEmail})`,
+        details: `Se otorgaron privilegios de ${
+          staffRole === "admin" ? "Administrador" : "Asesor Legal"
+        }.`,
+      });
+
       setFeedback(
         `Personal autorizado como ${
           staffRole === "admin" ? "Admin" : "Asesor"
@@ -400,11 +584,63 @@ function AdminDashboardContent() {
   const handleRevokeEmail = async (emailToDelete: string) => {
     try {
       await deleteDoc(doc(db, "allowed_emails", emailToDelete));
+
+      if (profile) {
+        await recordSystemLog({
+          category: "IAM_GOVERNANCE",
+          eventType: "Revocación de Acceso (Lista Blanca)",
+          outcome: "CRITICAL",
+          actorEmail: profile.email,
+          actorName: profile.fullName,
+          actorRole: profile.role,
+          targetResource: emailToDelete,
+          details: `Se eliminó el correo ${emailToDelete} de allowed_emails.`,
+        });
+      }
+
       await fetchBackofficeData();
       setFeedback("Acceso revocado correctamente.");
     } catch {
       setErrorMsg("No se pudo revocar el acceso.");
     }
+  };
+
+  const handleExportLogsCsv = (logsToExport: SystemLogEntry[]) => {
+    const headers = [
+      "Timestamp",
+      "Categoria",
+      "Tipo de Evento",
+      "Resultado",
+      "Actor",
+      "Rol",
+      "Expediente / Objetivo",
+      "Detalle",
+    ];
+    const rows = logsToExport.map((l) => [
+      new Date(l.timestamp).toLocaleString("es-CO"),
+      l.category,
+      `"${(l.eventType || "").replace(/"/g, '""')}"`,
+      l.outcome,
+      `"${(l.actorName || l.actorEmail || "").replace(/"/g, '""')}"`,
+      l.actorRole,
+      `"${(l.targetResource || "").replace(/"/g, '""')}"`,
+      `"${(l.details || "").replace(/"/g, '""')}"`,
+    ]);
+
+    const csvContent =
+      "data:text/csv;charset=utf-8," +
+      [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute(
+      "download",
+      `GVC_Audit_Logs_${new Date().toISOString().slice(0, 10)}.csv`
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   if (!isStaff) {
@@ -418,7 +654,6 @@ function AdminDashboardContent() {
     );
   }
 
-  // Mientras sincroniza con Firestore por primera vez, muestra el Skeleton Estructural
   if (loadingData && applicationsList.length === 0 && allowedList.length === 0) {
     return <DashboardContentSkeleton />;
   }
@@ -444,6 +679,76 @@ function AdminDashboardContent() {
   const rejectedCount = applicationsList.filter(
     (a) => a.status === "rejected"
   ).length;
+
+  // Filtrado de Logs para la vista ?tab=logs
+  const filteredLogs = systemLogs.filter((entry) => {
+    const matchesCategory =
+      logSubTab === "ALL" || entry.category === logSubTab;
+    const matchesOutcome =
+      logOutcomeFilter === "ALL" || entry.outcome === logOutcomeFilter;
+    const q = logSearchQuery.trim().toLowerCase();
+    const matchesSearch =
+      !q ||
+      entry.eventType.toLowerCase().includes(q) ||
+      entry.actorName.toLowerCase().includes(q) ||
+      entry.actorEmail.toLowerCase().includes(q) ||
+      (entry.targetResource || "").toLowerCase().includes(q) ||
+      entry.details.toLowerCase().includes(q);
+
+    return matchesCategory && matchesOutcome && matchesSearch;
+  });
+
+  const getCategoryBadge = (cat: SystemLogCategory) => {
+    switch (cat) {
+      case "SECURITY_AUTH":
+        return {
+          label: "Sign-In & Seguridad",
+          className: "bg-brand-charcoal text-white",
+        };
+      case "CASE_TRACEABILITY":
+        return {
+          label: "Trazabilidad de Caso",
+          className: "bg-blue-600/15 text-blue-900 border border-blue-600/30",
+        };
+      case "PII_VAULT":
+        return {
+          label: "Bóveda PII & Storage",
+          className:
+            "bg-purple-600/15 text-purple-900 border border-purple-600/30",
+        };
+      case "IAM_GOVERNANCE":
+        return {
+          label: "Gobernanza & IAM",
+          className:
+            "bg-amber-500/15 text-amber-900 border border-amber-500/30",
+        };
+    }
+  };
+
+  const getOutcomeBadge = (outcome: SystemLogOutcome) => {
+    switch (outcome) {
+      case "SUCCESS":
+        return {
+          label: "EXITOSO",
+          className: "bg-emerald-500/15 text-emerald-800",
+        };
+      case "WARNING":
+        return {
+          label: "ALERTA / AJUSTE",
+          className: "bg-amber-500/15 text-amber-900",
+        };
+      case "CRITICAL":
+        return {
+          label: "CRÍTICO / REVOCADO",
+          className: "bg-brand-red/15 text-brand-red",
+        };
+      case "INFO":
+        return {
+          label: "INFORMATIVO",
+          className: "bg-brand-platinum text-brand-charcoal",
+        };
+    }
+  };
 
   return (
     <div className="space-y-8 font-sans">
@@ -480,7 +785,7 @@ function AdminDashboardContent() {
         </div>
       )}
 
-      {/* VISTA 1: GOBERNANZA & MÉTRICAS (Con contraste WCAG AA >= 4.5:1 y jerarquía <h2> para Lighthouse 100%) */}
+      {/* VISTA 1: GOBERNANZA & MÉTRICAS */}
       {activeTab === "gobernanza" && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -557,7 +862,8 @@ function AdminDashboardContent() {
                   Monitor Maestro de Operaciones
                 </h2>
                 <p className="text-xs text-brand-charcoal/70">
-                  El porcentaje de avance se calcula automáticamente según cuestionario, bóveda y meetings.
+                  El porcentaje de avance se calcula automáticamente según
+                  cuestionario, bóveda y meetings.
                 </p>
               </div>
             </div>
@@ -738,7 +1044,8 @@ function AdminDashboardContent() {
                   Mis Procesos Asignados ({myAssignedCases.length})
                 </h2>
                 <p className="text-xs text-brand-charcoal/70">
-                  Haz clic en &ldquo;Gestionar Caso&rdquo; para abrir la mesa de trabajo completa del cliente.
+                  Haz clic en &ldquo;Gestionar Caso&rdquo; para abrir la mesa de
+                  trabajo completa del cliente.
                 </p>
               </div>
             </div>
@@ -1013,7 +1320,7 @@ function AdminDashboardContent() {
         </div>
       )}
 
-      {/* VISTA 5: ESTUDIO DE PUBLICACIÓN FINTECH PREMIUM (UNIFICADO A 3 FORMATOS) */}
+      {/* VISTA 5: ESTUDIO DE PUBLICACIÓN FINTECH PREMIUM */}
       {activeTab === "sala-cms" && (
         <div className="space-y-6">
           <form
@@ -1021,14 +1328,17 @@ function AdminDashboardContent() {
             className="rounded-3xl bg-brand-white border border-brand-charcoal/10 shadow-sm overflow-hidden"
           >
             <div className="bg-brand-charcoal px-7 py-6 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-red/20 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-red">
-                  <Sparkles className="h-3 w-3" />
-                  <span>Estudio Editorial — Sala Consular</span>
-                </span>
-                <h2 className="font-display text-lg font-bold">
-                  Nueva Publicación para el Portal de Clientes
-                </h2>
+              <div className="flex items-center gap-3.5">
+                <BrandLogoIcon className="h-10 w-10" />
+                <div className="space-y-1">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-red/20 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-red">
+                    <Sparkles className="h-3 w-3" />
+                    <span>Estudio Editorial — Sala Consular</span>
+                  </span>
+                  <h2 className="font-display text-lg font-bold">
+                    Nueva Publicación para el Portal de Clientes
+                  </h2>
+                </div>
               </div>
 
               <div className="inline-flex rounded-xl bg-white/10 p-1 border border-white/10 self-start sm:self-auto">
@@ -1192,7 +1502,8 @@ function AdminDashboardContent() {
 
               <div className="flex items-center justify-between pt-2 border-t border-brand-platinum">
                 <p className="text-[11px] text-brand-charcoal/65">
-                  Al eliminar una publicación de abajo, también se borra su archivo de Firebase Storage.
+                  Al eliminar una publicación de abajo, también se borra su
+                  archivo de Firebase Storage.
                 </p>
                 <button
                   type="submit"
@@ -1210,7 +1521,6 @@ function AdminDashboardContent() {
             </div>
           </form>
 
-          {/* Lista de Publicaciones Activas */}
           <div className="rounded-2xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-2xs space-y-4">
             <h3 className="font-display text-base font-bold text-brand-charcoal">
               Publicaciones Activas en el Feed ({consularResources.length})
@@ -1381,6 +1691,253 @@ function AdminDashboardContent() {
                   </button>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VISTA 7: BITÁCORA MAESTRA DE LOGS & AUDITORÍA SIEM (SOLO ADMINS) */}
+      {activeTab === "logs" && profile?.role === "admin" && (
+        <div className="space-y-6">
+          {/* Cabecera y Resumen por Categoría */}
+          <div className="rounded-3xl bg-brand-charcoal text-brand-white p-6 sm:p-8 border border-white/10 shadow-lg space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-5">
+              <div className="flex items-center gap-3.5">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-red text-white shadow-md shadow-brand-red/25">
+                  <TerminalSquare className="h-6 w-6" />
+                </div>
+                <div>
+                  <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-brand-red">
+                    SIEM LEGALTECH • ZERO-TRUST AUDIT TRAIL
+                  </span>
+                  <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
+                    Bitácora Maestra de Logs & Trazabilidad Forense
+                  </h2>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleExportLogsCsv(filteredLogs)}
+                className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-brand-red px-5 py-2.5 text-xs font-bold text-white border border-white/15 transition-all self-start sm:self-auto"
+              >
+                <Download className="h-4 w-4" />
+                <span>Exportar CSV ({filteredLogs.length})</span>
+              </button>
+            </div>
+
+            {/* Sub-navegación de las 4 Categorías de Logs */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              {[
+                {
+                  id: "ALL",
+                  title: "Todos los Eventos",
+                  sub: "Vista unificada",
+                  count: systemLogs.length,
+                  icon: Activity,
+                },
+                {
+                  id: "SECURITY_AUTH",
+                  title: "Sign-In & Seguridad",
+                  sub: "Accesos y sesiones",
+                  count: systemLogs.filter(
+                    (l) => l.category === "SECURITY_AUTH"
+                  ).length,
+                  icon: Lock,
+                },
+                {
+                  id: "CASE_TRACEABILITY",
+                  title: "Trazabilidad de Casos",
+                  sub: "Flujo consular y estatus",
+                  count: systemLogs.filter(
+                    (l) => l.category === "CASE_TRACEABILITY"
+                  ).length,
+                  icon: FolderKanban,
+                },
+                {
+                  id: "PII_VAULT",
+                  title: "Bóveda PII & Storage",
+                  sub: "Soportes y purgas",
+                  count: systemLogs.filter((l) => l.category === "PII_VAULT")
+                    .length,
+                  icon: FolderLock,
+                },
+                {
+                  id: "IAM_GOVERNANCE",
+                  title: "Gobernanza & IAM",
+                  sub: "Altas y revocaciones",
+                  count: systemLogs.filter(
+                    (l) => l.category === "IAM_GOVERNANCE"
+                  ).length,
+                  icon: ShieldCheck,
+                },
+              ].map((tabItem) => {
+                const Icon = tabItem.icon;
+                const isSelected = logSubTab === tabItem.id;
+                return (
+                  <button
+                    key={tabItem.id}
+                    type="button"
+                    onClick={() => setLogSubTab(tabItem.id as any)}
+                    className={`flex flex-col justify-between rounded-2xl p-4 border text-left transition-all ${
+                      isSelected
+                        ? "bg-brand-red border-brand-red text-white shadow-md"
+                        : "bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-2">
+                      <Icon className="h-4 w-4" />
+                      <span className="rounded-full bg-black/25 px-2.5 py-0.5 font-mono text-xs font-bold">
+                        {tabItem.count}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="font-display text-xs font-bold">
+                        {tabItem.title}
+                      </p>
+                      <p className="text-[10px] opacity-75 mt-0.5">
+                        {tabItem.sub}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Barra de Búsqueda y Filtro de Resultado */}
+          <div className="rounded-2xl bg-brand-white p-5 border border-brand-charcoal/10 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+            <div className="relative flex-1">
+              <Search className="h-4 w-4 text-brand-charcoal/45 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={logSearchQuery}
+                onChange={(e) => setLogSearchQuery(e.target.value)}
+                placeholder="Buscar por usuario, correo, expediente, acción o detalle técnico..."
+                aria-label="Buscar en los registros de auditoría"
+                className="h-11 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 pl-10 pr-4 text-xs sm:text-sm text-brand-charcoal placeholder:text-brand-charcoal/50 focus:bg-brand-white focus:border-brand-red focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <label
+                htmlFor="log-outcome-select"
+                className="text-xs font-bold text-brand-charcoal/70"
+              >
+                Resultado:
+              </label>
+              <select
+                id="log-outcome-select"
+                value={logOutcomeFilter}
+                onChange={(e) => setLogOutcomeFilter(e.target.value as any)}
+                className="h-11 rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-3.5 text-xs font-bold text-brand-charcoal focus:border-brand-red focus:outline-none"
+              >
+                <option value="ALL">Todos los estados</option>
+                <option value="SUCCESS">Exitoso (SUCCESS)</option>
+                <option value="INFO">Informativo (INFO)</option>
+                <option value="WARNING">Alerta / Ajuste (WARNING)</option>
+                <option value="CRITICAL">Crítico / Revocado (CRITICAL)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Tabla Estructurada de Logs con Columnas */}
+          <div className="rounded-2xl bg-brand-white border border-brand-charcoal/10 shadow-2xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-brand-platinum/60 border-b border-brand-charcoal/10 font-mono text-[10px] font-bold uppercase tracking-wider text-brand-charcoal/75">
+                    <th className="py-3.5 px-4 whitespace-nowrap">
+                      Timestamp (Fecha / Hora)
+                    </th>
+                    <th className="py-3.5 px-4 whitespace-nowrap">Categoría</th>
+                    <th className="py-3.5 px-4 whitespace-nowrap">
+                      Tipo de Evento
+                    </th>
+                    <th className="py-3.5 px-4 whitespace-nowrap">
+                      Actor & Rol
+                    </th>
+                    <th className="py-3.5 px-4 whitespace-nowrap">
+                      Objetivo / Expediente
+                    </th>
+                    <th className="py-3.5 px-4 whitespace-nowrap">Resultado</th>
+                    <th className="py-3.5 px-4 min-w-[260px]">
+                      Detalle Técnico
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-platinum text-xs">
+                  {filteredLogs.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={7}
+                        className="py-12 text-center text-brand-charcoal/65 font-medium"
+                      >
+                        No se encontraron registros que coincidan con los
+                        filtros seleccionados.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredLogs.map((logItem) => {
+                      const catBadge = getCategoryBadge(logItem.category);
+                      const outBadge = getOutcomeBadge(logItem.outcome);
+                      return (
+                        <tr
+                          key={logItem.id}
+                          className="hover:bg-brand-platinum/25 transition-colors"
+                        >
+                          <td className="py-3.5 px-4 font-mono text-[11px] text-brand-charcoal/80 whitespace-nowrap">
+                            {new Date(logItem.timestamp).toLocaleString(
+                              "es-CO",
+                              {
+                                year: "numeric",
+                                month: "2-digit",
+                                day: "2-digit",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              }
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-bold ${catBadge.className}`}
+                            >
+                              {catBadge.label}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 font-display font-bold text-brand-charcoal whitespace-nowrap">
+                            {logItem.eventType}
+                          </td>
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-brand-charcoal">
+                                {logItem.actorName}
+                              </span>
+                              <span className="rounded bg-brand-charcoal/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase text-brand-charcoal">
+                                {logItem.actorRole}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 font-medium text-brand-charcoal/85 whitespace-nowrap">
+                            {logItem.targetResource || "Sistema Global"}
+                          </td>
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-0.5 font-mono text-[10px] font-bold ${outBadge.className}`}
+                            >
+                              {outBadge.label}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-brand-charcoal/75 leading-relaxed">
+                            {logItem.details}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
