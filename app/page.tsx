@@ -18,6 +18,8 @@ import {
   Award,
   Globe2,
   ChevronDown,
+  CalendarClock,
+  Users,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -36,6 +38,8 @@ const PLANS_BY_COUNTRY: Record<
       name: string;
       tagline: string;
       price: string;
+      currency: string;
+      unitLabel: string;
       description: string;
       highlighted?: boolean;
       badge?: string;
@@ -51,53 +55,61 @@ const PLANS_BY_COUNTRY: Record<
     plans: [
       {
         name: "Essential USA",
-        tagline: "Renovación o Solicitud Estándar B1/B2",
-        price: "$190",
+        tagline: "Renovación o Gestión Base DS-160",
+        price: "$180.000",
+        currency: "COP",
+        unitLabel: "Precio lanzamiento • Por solicitante",
         description:
-          "Ideal para solicitantes con historial de viajes previo o renovaciones de visa americana sin entrevista.",
+          "Ideal para renovaciones sin entrevista o viajeros que solo requieren un diligenciamiento técnico impecable de su formulario y programación de citas.",
         features: [
-          "Acceso completo al Portal de Cliente 24/7",
-          "Formulario Inteligente DS-160 en español auditado en inglés técnico",
-          "Revisión legal de pasaporte y soportes en Bóveda Criptográfica",
-          "Emisión de hoja oficial de Confirmación CEAC DS-160",
-          "Programación de citas oficiales en CAS y Embajada de EE. UU.",
+          "Acceso al Portal de Cliente 24/7 y carga segura de datos",
+          "Cuestionario inteligente en español traducido a inglés técnico (DS-160)",
+          "Auditoría de coherencia de datos antes de enviar a CEAC",
+          "Emisión de hoja oficial de confirmación DS-160",
+          "Creación de cuenta oficial, gestión de pago MRV y agendamiento CAS + Embajada",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan Essential para Estados Unidos ($190 USD).",
+          "Hola Global Visa Consulting, quiero contratar el Plan Essential USA ($180.000 COP).",
       },
       {
         name: "Priority Pro USA",
-        tagline: "Estrategia de Arraigo 214(b) + Simulacro 1-a-1",
-        price: "$290",
+        tagline: "Primera Vez + Estrategia de Arraigo + Simulacro",
+        price: "$290.000",
+        currency: "COP",
+        unitLabel: "Por solicitante",
         highlighted: true,
-        badge: "Más Elegido",
+        badge: "MÁS ELEGIDO",
         description:
-          "Diseñado para primeras solicitudes de visa B1/B2 que buscan máxima solidez probatoria y entrenamiento real frente al cónsul.",
+          "Diseñado para primeras solicitudes que buscan estructurar un perfil sólido bajo los criterios de la Sección 214(b) y llegar entrenados frente al cónsul.",
         features: [
           "Todo lo incluido en el Plan Essential USA",
-          "Estructuración jurídica de perfil de arraigo laboral y familiar",
-          "Acceso completo a la Sala de Entrenamiento Consular",
-          "1 Simulacro de entrevista consular 1-a-1 en vivo (Google Meet)",
-          "Monitoreo prioritario de adelanto de cita consular en el sistema",
+          "Diagnóstico y estructuración de perfil de arraigo laboral y familiar",
+          "Guía personalizada de documentos de soporte según tu perfil",
+          "1 Sesión de simulacro de entrevista consular 1-a-1 en vivo (Google Meet)",
+          "Acceso a banco de preguntas reales y entrenamiento en el portal",
+          "1 Búsqueda y gestión de adelanto de cita consular incluida",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro para Estados Unidos ($290 USD).",
+          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro USA ($290.000 COP).",
       },
       {
         name: "VIP Concierge USA",
-        tagline: "Ejecutivos, Familias o Rechazos Previos 214(b)",
-        price: "$450",
+        tagline: "Rechazos Previos 214(b), Independientes o Ejecutivos",
+        price: "$420.000",
+        currency: "COP",
+        unitLabel: "Por solicitante",
         description:
-          "Acompañamiento jurídico intensivo con reconstrucción de perfil tras negaciones previas o gestión integral de grupo familiar.",
+          "Acompañamiento intensivo para reconstruir perfiles tras una negación previa o estructurar ingresos complejos (independientes, comerciantes o patrocinadores).",
         features: [
           "Todo lo incluido en el Plan Priority Pro USA",
-          "Auditoría forense de rechazos previos bajo Sección 214(b)",
-          "Doble sesión de simulacro consular con Senior Legal Advisor",
-          "Redacción técnica de cartas de patrocinio o invitación ejecutiva",
-          "Línea directa preferencial con tu especialista por WhatsApp",
+          "Auditoría detallada de causas de rechazo previo (Sección 214b)",
+          "Estrategia de corrección de perfil y narrativa consular",
+          "Doble sesión (2) de simulacro de entrevista 1-a-1 con feedback correctivo",
+          "Monitoreo prioritario continuo para adelantamiento de cita",
+          "Soporte directo preferencial por WhatsApp durante todo el proceso",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge para Estados Unidos ($450 USD).",
+          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge USA ($420.000 COP).",
       },
     ],
   },
@@ -108,53 +120,61 @@ const PLANS_BY_COUNTRY: Record<
     plans: [
       {
         name: "Essential Japón",
-        tagline: "Turismo Individual con Solvencia Propia",
-        price: "$150",
+        tagline: "Estructuración Básica de Expediente",
+        price: "$150.000",
+        currency: "COP",
+        unitLabel: "Por solicitante",
         description:
-          "Para viajeros con ingresos y extractos bancarios propios que requieren estructuración oficial de su expediente japonés.",
+          "Para viajeros con ingresos formales (empleados) y solvencia propia clara que necesitan sus formularios e itinerario oficial bajo norma japonesa.",
         features: [
-          "Acceso completo al Portal de Cliente y Bóveda Documental 24/7",
-          "Diligenciamiento oficial del Formulario de Solicitud de Visa MOFA",
-          "Elaboración técnica del Schedule of Stay (Itinerario día por día)",
-          "Verificación de reservas de vuelos y hoteles según norma consular",
-          "Instructivo exacto de armado de carpeta física para radicación",
+          "Acceso al Portal de Cliente y lista de chequeo interactiva",
+          "Diligenciamiento oficial del Formulario de Solicitud MOFA (con código QR)",
+          "Elaboración técnica del Schedule of Stay (Itinerario día por día exigido)",
+          "Verificación de formato de reservas de vuelos y hoteles",
+          "Instructivo paso a paso de ordenamiento e impresión de carpeta física",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan Essential para Japón ($150 USD).",
+          "Hola Global Visa Consulting, quiero contratar el Plan Essential Japón ($150.000 COP).",
       },
       {
         name: "Priority Pro Japón",
-        tagline: "Auditoría Financiera + Carpeta Consular Llave en Mano",
-        price: "$240",
+        tagline: "Auditoría Financiera + Carpeta Llave en Mano",
+        price: "$230.000",
+        currency: "COP",
+        unitLabel: "Por solicitante",
         highlighted: true,
-        badge: "Recomendado Japón",
+        badge: "RECOMENDADO JAPÓN",
         description:
-          "Blindaje documental completo con auditoría de extractos bancarios de los últimos 3 meses y sesión 1-a-1 de revisión pre-radicación.",
+          "Blindaje documental completo. Revisamos tus extractos bancarios al milímetro y diseñamos una ruta lógica para evitar requerimientos de la Embajada.",
         features: [
           "Todo lo incluido en el Plan Essential Japón",
-          "Auditoría milimétrica de extractos bancarios, saldos y movimientos",
-          "Diseño personalizado de ruta lógica en Schedule of Stay (Tokio/Kioto/Osaka)",
-          "1 Sesión 1-a-1 en vivo (Google Meet) de revisión final de carpeta física",
-          "Emisión de entregables oficiales listos para imprimir en tu portal",
+          "Auditoría detallada de extractos bancarios (últimos 3 meses, saldos y promedios)",
+          "Diseño personalizado de ruta lógica en Schedule of Stay (Tokio, Kioto, Osaka, etc.)",
+          "Estructuración de presupuesto de viaje coherente con tu solvencia",
+          "1 Sesión 1-a-1 en vivo (Google Meet) de revisión final antes de imprimir",
+          "Archivos finales en PDF auditados y listos para descarga en tu portal",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro para Japón ($240 USD).",
+          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro Japón ($230.000 COP).",
       },
       {
         name: "VIP Concierge Japón",
-        tagline: "Grupos Familiares, Con Garante o Perfil Independiente",
-        price: "$380",
+        tagline: "Con Garante (Patrocinador), Independientes o Familias",
+        price: "$340.000",
+        currency: "COP",
+        unitLabel: "Por solicitante / o Pareja",
         description:
-          "Especial para solicitudes con patrocinador económico (carta de garantía), trabajadores independientes o grupos familiares.",
+          "Especial para solicitudes que requieren demostrar ingresos como independientes, rentistas de capital, o viajeros patrocinados por un familiar.",
         features: [
           "Todo lo incluido en el Plan Priority Pro Japón",
-          "Estructuración jurídica de Carta de Garantía (Guarantor) y parentesco",
-          "Conciliación contable de ingresos para independientes o empresarios",
-          "Doble auditoría documental con Senior Advisor especializado en MOFA",
-          "Soporte directo preferencial por WhatsApp hasta la entrega del visado",
+          "Redacción técnica de Carta de Garantía (Letter of Guarantee) y motivo de invitación",
+          "Estructuración de soportes de parentesco y solvencia del patrocinador",
+          "Conciliación documental de ingresos para independientes o empresarios",
+          "Redacción de cartas explicativas ante movimientos bancarios atípicos",
+          "Soporte directo por WhatsApp hasta la radicación del expediente",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge para Japón ($380 USD).",
+          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge Japón ($340.000 COP).",
       },
     ],
   },
@@ -190,12 +210,10 @@ export default function LandingPage() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [scrolledPastHero, setScrolledPastHero] = useState(false);
 
-  // Selector de país con estado de transición animada para las tarjetas
   const [selectedPlanCountry, setSelectedPlanCountry] =
     useState<DestinationCountry>("USA");
   const [isSwitchingCountry, setIsSwitchingCountry] = useState(false);
 
-  // FAQs inician todas cerradas (null) hasta que el usuario haga clic
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
 
   const isFullyAuthenticated = Boolean(user && isTwoFactorVerified);
@@ -262,7 +280,7 @@ export default function LandingPage() {
       id="top"
       className="min-h-screen bg-brand-white text-brand-charcoal font-sans relative selection:bg-brand-red selection:text-white"
     >
-      {/* GLOBO 3D DINÁMICO: Más grande y centrado en el Hero, regresa al tamaño y posición actual al bajar */}
+      {/* GLOBO 3D DINÁMICO */}
       <div
         aria-hidden="true"
         className={`hidden lg:flex items-center justify-center pointer-events-none fixed w-[640px] h-[640px] z-0 transition-all duration-700 ease-out ${
@@ -274,7 +292,7 @@ export default function LandingPage() {
         <ConsularGlobe />
       </div>
 
-      {/* NAVBAR INTELIGENTE: Sólida en el tope, traslúcida al bajar y 100% visible al hacer hover */}
+      {/* NAVBAR INTELIGENTE */}
       <header
         className={`sticky top-0 z-40 px-4 sm:px-8 py-3.5 transition-all duration-300 border-b ${
           isScrolled
@@ -731,7 +749,7 @@ export default function LandingPage() {
               </p>
             </div>
 
-            {/* Selector de País con Píldora Deslizante Animada (Sliding Pill) */}
+            {/* Selector de País con Píldora Deslizante Animada */}
             <div className="flex flex-col sm:items-end gap-2 shrink-0">
               <span className="text-[11px] font-bold uppercase tracking-wider text-brand-charcoal/65">
                 Selecciona el país de tu trámite:
@@ -741,7 +759,6 @@ export default function LandingPage() {
                 aria-label="Seleccionar país de destino para ver planes"
                 className="relative grid grid-cols-2 rounded-2xl bg-brand-platinum p-1.5 border border-brand-charcoal/15 w-full sm:w-[390px] select-none overflow-hidden"
               >
-                {/* Píldora deslizante de fondo */}
                 <span
                   aria-hidden="true"
                   className={`pointer-events-none absolute top-1.5 bottom-1.5 left-1.5 w-[calc(50%-6px)] rounded-xl bg-brand-charcoal shadow-md transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
@@ -800,7 +817,7 @@ export default function LandingPage() {
             </div>
           </div>
 
-          {/* Grilla de Planes con Animación Fluida y Stagger al cambiar de país */}
+          {/* Grilla de Planes en COP */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-stretch">
             {activeCountryPricing.plans.map((plan, index) => {
               const staggerDelay =
@@ -836,13 +853,18 @@ export default function LandingPage() {
                         )}
                       </div>
 
-                      <div className="flex items-baseline gap-1">
-                        <span className="font-display text-4xl font-extrabold text-white">
-                          {plan.price}
-                        </span>
-                        <span className="text-xs font-bold text-white/70">
-                          USD
-                        </span>
+                      <div className="space-y-1">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="font-display text-4xl font-extrabold text-white">
+                            {plan.price}
+                          </span>
+                          <span className="text-xs font-bold text-white/70">
+                            {plan.currency}
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-semibold text-brand-red">
+                          {plan.unitLabel}
+                        </p>
                       </div>
 
                       <p className="text-xs text-white/80 leading-relaxed">
@@ -887,13 +909,18 @@ export default function LandingPage() {
                       </p>
                     </div>
 
-                    <div className="flex items-baseline gap-1">
-                      <span className="font-display text-4xl font-extrabold text-brand-charcoal">
-                        {plan.price}
-                      </span>
-                      <span className="text-xs font-bold text-brand-charcoal/70">
-                        USD
-                      </span>
+                    <div className="space-y-1">
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="font-display text-4xl font-extrabold text-brand-charcoal">
+                          {plan.price}
+                        </span>
+                        <span className="text-xs font-bold text-brand-charcoal/70">
+                          {plan.currency}
+                        </span>
+                      </div>
+                      <p className="text-[11px] font-semibold text-brand-charcoal/55">
+                        {plan.unitLabel}
+                      </p>
                     </div>
 
                     <p className="text-xs text-brand-charcoal/75 leading-relaxed">
@@ -923,9 +950,48 @@ export default function LandingPage() {
               );
             })}
           </div>
+
+          {/* Nota / Botón Secundario para Tarifas Grupales y Adelanto de Cita */}
+          <div className="rounded-3xl bg-brand-platinum/60 border border-brand-charcoal/12 p-6 sm:px-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-red/10 text-brand-red">
+                {selectedPlanCountry === "USA" ? (
+                  <CalendarClock className="h-5 w-5" />
+                ) : (
+                  <Users className="h-5 w-5" />
+                )}
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-xs sm:text-sm font-bold text-brand-charcoal">
+                  {selectedPlanCountry === "USA"
+                    ? "¿Viajas en familia (3 o más personas) o solo necesitas Adelantar tu Cita?"
+                    : "¿Viajas en familia (3 o más personas) a Japón?"}
+                </p>
+                <p className="text-xs text-brand-charcoal/70">
+                  {selectedPlanCountry === "USA"
+                    ? "Tarifas preferenciales para grupos familiares y servicio individual de monitoreo de citas si ya tienes tu DS-160 listo."
+                    : "Cotiza nuestra tarifa grupal sincronizada para núcleos familiares que viajan bajo el mismo itinerario."}
+                </p>
+              </div>
+            </div>
+
+            <a
+              href={getWhatsAppUrl(
+                selectedPlanCountry === "USA"
+                  ? "Hola Global Visa Consulting, quiero cotizar tarifa grupal familiar o el servicio de Adelanto de Cita ($160.000 COP)."
+                  : "Hola Global Visa Consulting, quiero cotizar tarifa grupal familiar para Japón."
+              )}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-full bg-brand-charcoal hover:bg-brand-red px-5 py-3 text-xs font-bold text-white transition-all shrink-0"
+            >
+              <span>Cotiza tarifa grupal aquí</span>
+              <ArrowUpRight className="h-4 w-4" />
+            </a>
+          </div>
         </section>
 
-        {/* SECCIÓN 5: PREGUNTAS FRECUENTES (TODAS CERRADAS AL INICIO) */}
+        {/* SECCIÓN 5: PREGUNTAS FRECUENTES */}
         <section
           id="faq"
           className="scroll-mt-20 max-w-4xl mx-auto px-4 sm:px-8 py-20 border-t border-brand-charcoal/10 space-y-10"
@@ -989,7 +1055,7 @@ export default function LandingPage() {
         </section>
       </main>
 
-      {/* FOOTER SÓLIDO CON LOGO OFICIAL EN MODO DARK */}
+      {/* FOOTER SÓLIDO CON EL MISMO LOGO DEL INICIO */}
       <footer className="relative z-20 bg-brand-charcoal text-brand-white border-t border-white/10 px-4 sm:px-8 py-12">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
           <a
@@ -998,10 +1064,7 @@ export default function LandingPage() {
             className="focus:outline-none rounded-xl inline-block"
             aria-label="Subir al inicio de Global Visa Consulting"
           >
-            <BrandLogo
-              theme="dark"
-              subtitle="EE. UU. & JAPÓN • LEGALTECH"
-            />
+            <BrandLogo theme="dark" />
           </a>
 
           <p className="text-xs text-white/70">
