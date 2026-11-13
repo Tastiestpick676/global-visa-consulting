@@ -2,10 +2,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter, redirect } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { BrandLogo } from "@/components/ui/BrandLogo";
+import {
+  recordSystemLog,
+  requestServerTwoFactorOtp,
+  verifyServerTwoFactorOtp,
+} from "@/lib/firebase/db";
+import { UserRole } from "@/types/visa";
 import {
   Lock,
   ArrowRight,
@@ -18,24 +24,37 @@ import {
   ArrowLeft,
   Eye,
   EyeOff,
+  ShieldCheck,
+  RefreshCw,
 } from "lucide-react";
 import { getWhatsAppUrl } from "@/lib/constants";
 
 const MAX_FAILED_ATTEMPTS = 5;
-const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutos de bloqueo por fuerza bruta
+const LOCKOUT_DURATION_MS = 5 * 60 * 1000;
 
 export default function LoginPage() {
-  const [mode, setMode] = useState<"login" | "forgot">("login");
+  const [mode, setMode] = useState<"login" | "forgot" | "2fa">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+
+  // Estados del Desafío 2FA (Validado en Servidor mediante HMAC-SHA256)
+  const [otpChallengeToken, setOtpChallengeToken] = useState("");
+  const [devOtpPreview, setDevOtpPreview] = useState<string | undefined>(
+    undefined
+  );
+  const [otpInput, setOtpInput] = useState("");
+  const [pendingUserMeta, setPendingUserMeta] = useState<{
+    role: UserRole;
+    fullName: string;
+    email: string;
+  } | null>(null);
 
   const [error, setError] = useState("");
   const [unregisteredAlert, setUnregisteredAlert] = useState(false);
   const [resetSentSuccess, setResetSentSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // Protección contra Fuerza Bruta y Accesos Sospechosos
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
@@ -44,20 +63,24 @@ export default function LoginPage() {
     user,
     profile,
     loading,
+    isTwoFactorVerified,
+    completeTwoFactorVerification,
     signIn,
     signInWithGoogle,
     requestPasswordReset,
+    signOut,
   } = useAuth();
   const router = useRouter();
 
-  // Si el usuario ya tiene sesión activa, redirige directamente a su panel correspondiente
-  if (!loading && user) {
-    const targetUrl =
-      profile?.role === "admin" || profile?.role === "advisor"
-        ? "/dashboard/admin?tab=gobernanza"
-        : "/dashboard";
-    redirect(targetUrl);
-  }
+  useEffect(() => {
+    if (!loading && user && profile && mode !== "2fa" && isTwoFactorVerified) {
+      const targetUrl =
+        profile.role === "admin" || profile.role === "advisor"
+          ? "/dashboard/admin?tab=gobernanza"
+          : "/dashboard";
+      router.replace(targetUrl);
+    }
+  }, [loading, user, profile, mode, isTwoFactorVerified, router]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -102,7 +125,10 @@ export default function LoginPage() {
     return () => clearInterval(interval);
   }, [lockoutUntil]);
 
-  const registerFailedAttempt = (forceLockout = false) => {
+  const registerFailedAttempt = async (
+    targetEmail: string,
+    forceLockout = false
+  ) => {
     const nextAttempts = forceLockout
       ? MAX_FAILED_ATTEMPTS
       : failedAttempts + 1;
@@ -113,6 +139,17 @@ export default function LoginPage() {
       const lockTime = Date.now() + LOCKOUT_DURATION_MS;
       setLockoutUntil(lockTime);
       localStorage.setItem("gvc_auth_lockout_until", String(lockTime));
+
+      await recordSystemLog({
+        category: "SECURITY_AUTH",
+        eventType: "Bloqueo Temporal por Fuerza Bruta",
+        outcome: "CRITICAL",
+        actorEmail: targetEmail || "desconocido",
+        actorName: targetEmail || "Anónimo",
+        actorRole: "anonymous",
+        targetResource: "Escudo Anti-Brute-Force (Login)",
+        details: `Se activó el bloqueo de seguridad de 5 minutos tras alcanzar ${MAX_FAILED_ATTEMPTS} intentos fallidos consecutivos.`,
+      });
     }
   };
 
@@ -125,6 +162,22 @@ export default function LoginPage() {
 
   const isLocked = Boolean(lockoutUntil && lockoutUntil > Date.now());
 
+  const dispatchTwoFactorOtp = async (meta: {
+    role: UserRole;
+    fullName: string;
+    email: string;
+  }) => {
+    setOtpInput("");
+    setDevOtpPreview(undefined);
+    const res = await requestServerTwoFactorOtp(meta);
+    if (res.otpChallengeToken) {
+      setOtpChallengeToken(res.otpChallengeToken);
+    }
+    if (res.devOtpPreview) {
+      setDevOtpPreview(res.devOtpPreview);
+    }
+  };
+
   const handleSubmitLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLocked) return;
@@ -134,33 +187,134 @@ export default function LoginPage() {
     setSubmitting(true);
 
     try {
-      await signIn(email, password);
+      const result = await signIn(email, password);
       resetSecurityCounters();
-      router.push("/dashboard");
+
+      if (result.requiresTwoFactor) {
+        const meta = {
+          role: result.role,
+          fullName: result.fullName,
+          email: result.email,
+        };
+        setPendingUserMeta(meta);
+        setMode("2fa");
+        setSubmitting(false);
+        await dispatchTwoFactorOtp(meta);
+        return;
+      } else {
+        completeTwoFactorVerification();
+        const destinationRoute =
+          result.role === "admin" || result.role === "advisor"
+            ? "/dashboard/admin?tab=gobernanza"
+            : "/dashboard";
+        router.replace(destinationRoute);
+      }
     } catch (err: any) {
       if (err?.message === "UNREGISTERED_USER") {
         setUnregisteredAlert(true);
-        registerFailedAttempt();
+        await registerFailedAttempt(email);
       } else if (err?.code === "auth/too-many-requests") {
-        registerFailedAttempt(true);
+        await registerFailedAttempt(email, true);
         setError(
           "Hemos detectado actividad inusual o múltiples intentos fallidos desde tu red. El acceso se ha bloqueado temporalmente por seguridad."
         );
       } else {
-        registerFailedAttempt();
+        await registerFailedAttempt(email);
         const remaining = Math.max(
           0,
           MAX_FAILED_ATTEMPTS - (failedAttempts + 1)
         );
         setError(
           remaining > 0
-            ? `Credenciales inválidas. Si es tu primer ingreso sin Google o no recuerdas tu clave, usa "¿Olvidaste o aún no tienes contraseña?". (${remaining} intentos restantes antes del bloqueo de seguridad).`
+            ? `Credenciales inválidas o cuenta pendiente de activar clave. Si es tu primer ingreso sin Google, haz clic en "¿Olvidaste o aún no tienes contraseña?" para recibir tu enlace de activación en tu correo. (${remaining} intentos restantes).`
             : "Se ha alcanzado el límite de intentos fallidos permitidos."
         );
       }
-    } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleVerifyTwoFactorOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLocked || !pendingUserMeta) return;
+
+    const cleanCode = otpInput.replace(/\D/g, "");
+    if (cleanCode.length < 6) {
+      setError("Por favor ingresa los 6 dígitos del código de verificación.");
+      return;
+    }
+
+    if (!otpChallengeToken) {
+      setError(
+        "Generando desafío criptográfico... espera un segundo o haz clic en 'Reenviar nuevo código'."
+      );
+      return;
+    }
+
+    setError("");
+    setSubmitting(true);
+
+    try {
+      const verification = await verifyServerTwoFactorOtp({
+        otpGuess: cleanCode,
+        otpChallengeToken,
+      });
+
+      if (!verification.ok) {
+        await registerFailedAttempt(pendingUserMeta.email);
+        await recordSystemLog({
+          category: "SECURITY_AUTH",
+          eventType: "Fallo en Verificación 2FA (Firma HMAC Inválida)",
+          outcome: "WARNING",
+          actorEmail: pendingUserMeta.email,
+          actorName: pendingUserMeta.fullName,
+          actorRole: pendingUserMeta.role,
+          targetResource: "Segundo Factor Server-Side (2FA OTP)",
+          details:
+            verification.error ||
+            "El usuario ingresó un código de 6 dígitos inválido.",
+        });
+        setError(
+          verification.error ||
+            "El código de 6 dígitos no coincide. Verifica e inténtalo de nuevo."
+        );
+        setSubmitting(false);
+        return;
+      }
+
+      resetSecurityCounters();
+      completeTwoFactorVerification();
+
+      await recordSystemLog({
+        category: "SECURITY_AUTH",
+        eventType: "Verificación 2FA Exitosa (HMAC Validado en Servidor)",
+        outcome: "SUCCESS",
+        actorEmail: pendingUserMeta.email,
+        actorName: pendingUserMeta.fullName,
+        actorRole: pendingUserMeta.role,
+        targetResource: "Segundo Factor Server-Side (2FA OTP)",
+        details:
+          "Autenticación de doble factor verificada criptográficamente en el servidor.",
+      });
+
+      const targetRoute =
+        pendingUserMeta.role === "admin" || pendingUserMeta.role === "advisor"
+          ? "/dashboard/admin?tab=gobernanza"
+          : "/dashboard";
+      router.replace(targetRoute);
+    } catch {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelTwoFactor = async () => {
+    await signOut();
+    setPendingUserMeta(null);
+    setOtpChallengeToken("");
+    setDevOtpPreview(undefined);
+    setOtpInput("");
+    setSubmitting(false);
+    setMode("login");
   };
 
   const handleSubmitForgotPassword = async (e: React.FormEvent) => {
@@ -187,16 +341,20 @@ export default function LoginPage() {
     setUnregisteredAlert(false);
     setSubmitting(true);
     try {
-      await signInWithGoogle();
+      const result = await signInWithGoogle();
       resetSecurityCounters();
-      router.push("/dashboard");
+      completeTwoFactorVerification();
+      const targetRoute =
+        result.role === "admin" || result.role === "advisor"
+          ? "/dashboard/admin?tab=gobernanza"
+          : "/dashboard";
+      router.replace(targetRoute);
     } catch (err: any) {
       if (err?.message === "UNREGISTERED_USER") {
         setUnregisteredAlert(true);
       } else {
         setError("No se pudo iniciar sesión con Google. Inténtalo de nuevo.");
       }
-    } finally {
       setSubmitting(false);
     }
   };
@@ -207,9 +365,10 @@ export default function LoginPage() {
     return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
 
+  const cleanedOtpDigits = otpInput.replace(/\D/g, "");
+
   return (
     <div className="min-h-screen bg-brand-white grid grid-cols-1 lg:grid-cols-12 font-sans">
-      {/* Columna Izquierda: Branding y Seguridad con el nuevo Logo */}
       <aside
         aria-label="Información de seguridad del portal"
         className="hidden lg:flex lg:col-span-5 bg-brand-charcoal text-brand-white p-12 flex-col justify-between relative overflow-hidden"
@@ -229,8 +388,8 @@ export default function LoginPage() {
             </h1>
             <p className="text-sm text-white/80 leading-relaxed max-w-md">
               Toda tu información personal (PII) está protegida bajo reglas de
-              aislamiento criptográfico, detección de fuerza bruta y
-              verificación de identidad.
+              aislamiento criptográfico, verificación de identidad y monitoreo
+              en tiempo real.
             </p>
           </div>
         </div>
@@ -241,16 +400,14 @@ export default function LoginPage() {
             <span>Seguridad Nivel Bancario • Zero-Trust</span>
           </div>
           <p className="text-xs text-white/75">
-            Monitoreo activo contra intentos fallidos, enlaces de recuperación
-            con expiración automática y rotación de sesión cada 8 horas.
+            Protección activa de documentos sensibles, verificación 2FA
+            firmada en servidor y sesión segura con expiración automática.
           </p>
         </div>
       </aside>
 
-      {/* Columna Derecha: Landmark <main> */}
       <main className="lg:col-span-7 flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-md space-y-7">
-          {/* Logo visible en dispositivos móviles */}
           <div className="lg:hidden pb-2">
             <Link href="/" className="inline-block focus:outline-none">
               <BrandLogo theme="light" size="md" />
@@ -279,7 +436,139 @@ export default function LoginPage() {
             </div>
           )}
 
-          {mode === "login" ? (
+          {mode === "2fa" && pendingUserMeta ? (
+            <div className="space-y-6">
+              <button
+                type="button"
+                onClick={handleCancelTwoFactor}
+                className="inline-flex items-center gap-1.5 py-1 text-xs font-semibold text-brand-charcoal/75 hover:text-brand-charcoal transition-colors"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Cancelar y volver al login</span>
+              </button>
+
+              <div className="space-y-2">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-charcoal text-white shadow-md">
+                  <ShieldCheck className="h-6 w-6 text-brand-red" />
+                </div>
+                <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-brand-red block pt-1">
+                  VERIFICACIÓN EN DOS PASOS (2FA SERVER-SIDE)
+                </span>
+                <h2 className="font-display text-2xl sm:text-3xl font-bold text-brand-charcoal">
+                  Ingresa tu código de acceso
+                </h2>
+                <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
+                  Enviamos un código de 6 dígitos a{" "}
+                  <strong className="text-brand-charcoal">
+                    {pendingUserMeta.email}
+                  </strong>
+                  . Expira en 5 minutos.
+                </p>
+              </div>
+
+              {devOtpPreview && (
+                <div className="rounded-2xl bg-brand-charcoal text-white p-4 border-l-4 border-brand-red space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-brand-red">
+                      VISTA PREVIA DEV (SIN RESEND_API_KEY)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setOtpInput(devOtpPreview)}
+                      className="text-[11px] font-bold text-emerald-400 hover:underline"
+                    >
+                      Autocompletar código
+                    </button>
+                  </div>
+                  <p className="text-xs text-white/80">
+                    Código activo:{" "}
+                    <strong className="font-mono text-base tracking-widest text-white">
+                      {devOtpPreview}
+                    </strong>
+                  </p>
+                </div>
+              )}
+
+              {error && !isLocked && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2.5 rounded-xl bg-brand-red/10 border border-brand-red/30 p-3.5 text-xs font-semibold text-brand-red"
+                >
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleVerifyTwoFactorOtp} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="otp-code-input"
+                    className="block text-xs font-semibold text-brand-charcoal"
+                  >
+                    Código de 6 dígitos
+                  </label>
+                  <input
+                    id="otp-code-input"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    required
+                    autoFocus
+                    disabled={isLocked}
+                    value={cleanedOtpDigits}
+                    onChange={(e) => {
+                      const digitsOnly = e.target.value
+                        .replace(/\D/g, "")
+                        .slice(0, 6);
+                      setOtpInput(digitsOnly);
+                    }}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const pasted = e.clipboardData
+                        .getData("text")
+                        .replace(/\D/g, "")
+                        .slice(0, 6);
+                      setOtpInput(pasted);
+                    }}
+                    placeholder="000000"
+                    className="h-14 w-full rounded-2xl bg-brand-platinum/60 border-2 border-brand-charcoal/15 px-4 text-center font-mono text-2xl font-extrabold tracking-[0.35em] text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting || isLocked}
+                  className={`w-full inline-flex items-center justify-center gap-2 rounded-full px-6 py-4 text-xs sm:text-sm font-bold text-brand-white shadow-lg transition-all cursor-pointer ${
+                    cleanedOtpDigits.length === 6
+                      ? "bg-brand-red shadow-brand-red/25 hover:bg-brand-charcoal"
+                      : "bg-brand-charcoal hover:bg-brand-red"
+                  } disabled:opacity-50`}
+                >
+                  <span>
+                    {submitting
+                      ? "Verificando firma criptográfica..."
+                      : "Confirmar Código y Entrar al Portal"}
+                  </span>
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </form>
+
+              <div className="flex items-center justify-between pt-2 text-xs">
+                <span className="text-brand-charcoal/65">
+                  ¿No recibiste el código?
+                </span>
+                <button
+                  type="button"
+                  disabled={submitting || isLocked}
+                  onClick={() => dispatchTwoFactorOtp(pendingUserMeta)}
+                  className="inline-flex items-center gap-1.5 font-bold text-brand-red hover:underline"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>Reenviar nuevo código</span>
+                </button>
+              </div>
+            </div>
+          ) : mode === "login" ? (
             <>
               <div className="space-y-2">
                 <h2 className="font-display text-3xl font-bold text-brand-charcoal">
@@ -429,11 +718,6 @@ export default function LoginPage() {
                           ? "Ocultar contraseña"
                           : "Mostrar contraseña"
                       }
-                      title={
-                        showPassword
-                          ? "Ocultar contraseña"
-                          : "Mostrar contraseña"
-                      }
                       className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-brand-charcoal/65 hover:bg-brand-charcoal/5 hover:text-brand-charcoal transition-colors"
                     >
                       {showPassword ? (
@@ -451,9 +735,7 @@ export default function LoginPage() {
                   className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all disabled:opacity-50"
                 >
                   <span>
-                    {submitting
-                      ? "Verificando credenciales..."
-                      : "Ingresar a mi Portal"}
+                    {submitting ? "Verificando..." : "Ingresar a mi Portal"}
                   </span>
                   <ArrowRight className="h-4 w-4" />
                 </button>
@@ -502,11 +784,6 @@ export default function LoginPage() {
                     registrado y autorizado en nuestro sistema, recibirás en los
                     próximos minutos un enlace criptográfico de un solo uso para
                     configurar tu contraseña.
-                  </p>
-                  <p className="text-[11px] text-emerald-900/75">
-                    Por seguridad, el enlace expirará automáticamente tras su
-                    uso o después del tiempo límite establecido. Revisa también
-                    tu bandeja de Spam o Promociones.
                   </p>
                 </div>
               ) : (

@@ -79,7 +79,8 @@ export default function ConsularGlobe() {
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 1000);
-    camera.position.set(0, 0, 5.6);
+    // Distancia de cámara calibrada en 5.95 para que los arcos y el anillo nunca se recorten
+    camera.position.set(0, 0, 5.95);
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -204,7 +205,7 @@ export default function ConsularGlobe() {
         .add(end)
         .multiplyScalar(0.5)
         .normalize()
-        .multiplyScalar(RADIUS + dist * 0.24);
+        .multiplyScalar(RADIUS + dist * 0.22);
 
       const curve = new THREE.QuadraticBezierCurve3(start, mid, end);
       curves.push(curve);
@@ -226,9 +227,9 @@ export default function ConsularGlobe() {
       };
     });
 
-    // Escala inicial en el Hero: 1.24x más grande. Al bajar a la 1ra sección regresa a 1.0x
-    const HERO_SCALE = 1.24;
-    const SCROLLED_SCALE = 1.0;
+    // Escala calibrada: 1.14x en el Hero (sin cortes en los bordes) y 0.96x al hacer scroll
+    const HERO_SCALE = 1.14;
+    const SCROLLED_SCALE = 0.96;
 
     let targetRotY = -1.25;
     let targetRotX = 0.22;
@@ -247,7 +248,6 @@ export default function ConsularGlobe() {
       );
       const progress = Math.min(1, Math.max(0, scrollY / maxScroll));
 
-      // Transición progresiva de escala durante los primeros 450px de scroll (del Hero a la 1ra sección)
       const heroTransition = Math.min(1, Math.max(0, scrollY / 450));
       targetScale =
         HERO_SCALE - heroTransition * (HERO_SCALE - SCROLLED_SCALE);
@@ -270,7 +270,6 @@ export default function ConsularGlobe() {
       globeGroup.rotation.y += (desiredY - globeGroup.rotation.y) * 0.06;
       globeGroup.rotation.x += (targetRotX - globeGroup.rotation.x) * 0.06;
 
-      // Interpolación suave de escala (grande en el Hero -> tamaño estándar al bajar)
       currentScale += (targetScale - currentScale) * 0.08;
       globeGroup.scale.set(currentScale, currentScale, currentScale);
 

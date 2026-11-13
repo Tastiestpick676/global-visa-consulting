@@ -1,310 +1,474 @@
 // app/dashboard/page.tsx
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import Link from "next/link";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { useAuth } from "@/context/AuthContext";
+import { db } from "@/lib/firebase/config";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import {
   calculateApplicationMetrics,
   formatDisplayName,
-  StepSemaphore,
 } from "@/lib/firebase/db";
+import { UserProfile } from "@/types/visa";
 import {
   FileText,
   FolderLock,
   Award,
   CheckCircle2,
-  ArrowRight,
   Clock,
-  ShieldAlert,
+  ArrowRight,
+  Sparkles,
   UserCheck,
-  AlertCircle,
+  Download,
+  Calendar,
+  ShieldCheck,
+  Video,
+  ExternalLink,
 } from "lucide-react";
-import Link from "next/link";
 
-function getSemaphoreBadge(state: StepSemaphore) {
-  if (state === "completed") {
-    return {
-      label: "Completado",
-      classes: "bg-emerald-500/15 text-emerald-700 border border-emerald-500/30",
-      rowClasses: "bg-emerald-500/5 border-emerald-500/25",
-      iconColor: "text-emerald-600",
-    };
-  }
-  if (state === "in_progress") {
-    return {
-      label: "En Proceso",
-      classes: "bg-amber-500/15 text-amber-700 border border-amber-500/30",
-      rowClasses: "bg-amber-500/5 border-amber-500/25",
-      iconColor: "text-amber-600",
-    };
-  }
-  return {
-    label: "Faltante",
-    classes: "bg-brand-red/15 text-brand-red border border-brand-red/30",
-    rowClasses: "bg-brand-red/5 border-brand-red/20",
-    iconColor: "text-brand-red",
-  };
-}
-
-export default function DashboardPage() {
-  const { profile, application, loading, simulateClientView } = useAuth();
-  const router = useRouter();
-
-  const isStaff = profile?.role === "admin" || profile?.role === "advisor";
-
-  useEffect(() => {
-    if (!loading && isStaff && !simulateClientView) {
-      router.replace("/dashboard/admin?tab=gobernanza");
-    }
-  }, [isStaff, simulateClientView, loading, router]);
-
-  if (loading || (isStaff && !simulateClientView)) {
-    return (
-      <DashboardLayout>
-        <div className="py-20 text-center text-xs text-brand-charcoal/50">
-          Redirigiendo al Backoffice...
-        </div>
-      </DashboardLayout>
-    );
-  }
-
+export default function ClientDashboardHomePage() {
+  const { user, profile, application } = useAuth();
+  const isJapan = application?.destination === "JAPAN";
   const metrics = calculateApplicationMetrics(application);
-  const badgeStep1 = getSemaphoreBadge(metrics.formSemaphore);
-  const badgeStep2 = getSemaphoreBadge(metrics.vaultSemaphore);
-  const badgeStep3 = getSemaphoreBadge(metrics.consularSemaphore);
-  const advisorCleanName = formatDisplayName(application?.assignedAdvisorName);
+
+  const [advisorAvatar, setAdvisorAvatar] = useState<string>("");
+
+  const clientName = formatDisplayName(
+    application?.formData?.fullName ||
+      profile?.fullName ||
+      user?.displayName ||
+      "Titular"
+  );
+
+  const assignedAdvisorName = formatDisplayName(
+    application?.assignedAdvisorName ||
+      (profile?.role === "admin" || profile?.role === "advisor"
+        ? profile.fullName
+        : "")
+  );
+
+  // Buscar la foto real del asesor asignado en Firestore
+  useEffect(() => {
+    const loadAdvisorPhoto = async () => {
+      if (application?.assignedAdvisorPhotoUrl) {
+        setAdvisorAvatar(application.assignedAdvisorPhotoUrl);
+        return;
+      }
+
+      if (application?.assignedAdvisorId) {
+        try {
+          const snap = await getDoc(
+            doc(db, "users", application.assignedAdvisorId)
+          );
+          if (snap.exists()) {
+            const data = snap.data() as UserProfile;
+            setAdvisorAvatar(data.photoUrl || data.photoURL || "");
+            return;
+          }
+        } catch {}
+      }
+
+      if (
+        (profile?.role === "admin" || profile?.role === "advisor") &&
+        (profile.photoUrl || profile.photoURL || user?.photoURL)
+      ) {
+        setAdvisorAvatar(
+          profile.photoUrl || profile.photoURL || user?.photoURL || ""
+        );
+        return;
+      }
+
+      if (assignedAdvisorName) {
+        try {
+          const snap = await getDocs(collection(db, "users"));
+          snap.forEach((d) => {
+            const u = d.data() as UserProfile;
+            if (
+              formatDisplayName(u.fullName).toLowerCase() ===
+                assignedAdvisorName.toLowerCase() &&
+              (u.photoUrl || u.photoURL)
+            ) {
+              setAdvisorAvatar(u.photoUrl || u.photoURL || "");
+            }
+          });
+        } catch {}
+      }
+    };
+
+    loadAdvisorPhoto();
+  }, [
+    application?.assignedAdvisorId,
+    application?.assignedAdvisorPhotoUrl,
+    assignedAdvisorName,
+    profile,
+    user,
+  ]);
+
+  const steps = [
+    {
+      num: 1,
+      title: "Provisionamiento & Diagnóstico",
+      desc: `Expediente activado para ${
+        isJapan ? "Japón (MOFA)" : "Estados Unidos (B1/B2)"
+      }.`,
+      href: "/dashboard/perfil",
+    },
+    {
+      num: 2,
+      title: isJapan
+        ? "Formulario MOFA & Itinerario"
+        : "Formulario Inteligente DS-160",
+      desc: `${metrics.formCompletedCount} campos estratégicos completados en español.`,
+      href: "/dashboard/formulario",
+    },
+    {
+      num: 3,
+      title: "Bóveda Criptográfica PII",
+      desc: `${metrics.verifiedDocsCount} de ${metrics.requiredDocsTotal} soportes verificados por tu especialista.`,
+      href: "/dashboard/boveda",
+    },
+    {
+      num: 4,
+      title: "Sala Consular & Entregables",
+      desc: isJapan
+        ? "Emisión de carpeta física y Schedule of Stay oficial."
+        : "Confirmación CEAC DS-160 y simulacro 1-a-1 en Google Meet.",
+      href: "/dashboard/sala-entrenamiento",
+    },
+  ];
+
+  const deliverables = Array.isArray(application?.officialDeliverables)
+    ? application.officialDeliverables
+    : [];
+  const meetings = Array.isArray(application?.meetings)
+    ? application.meetings
+    : [];
 
   return (
     <DashboardLayout>
       <div className="space-y-8 font-sans">
-        {/* Bienvenida personalizada */}
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 rounded-2xl bg-brand-charcoal p-8 text-brand-white shadow-xl">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-red/20 px-3 py-1 text-xs font-semibold text-brand-red">
-                <ShieldAlert className="h-3.5 w-3.5" />
-                <span>Expediente Protegido y Verificado</span>
-              </span>
-              {advisorCleanName && (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300">
-                  <UserCheck className="h-3.5 w-3.5" />
-                  <span>Asesor: {advisorCleanName}</span>
-                </span>
-              )}
-            </div>
-            <h2 className="font-display text-3xl font-bold">
-              Hola, {formatDisplayName(profile?.fullName) || "Estimado Cliente"}
-            </h2>
-            <p className="text-sm text-white/70 max-w-xl">
-              Tu proceso para la{" "}
-              <span className="text-white font-semibold">{application?.visaType}</span>{" "}
-              avanza automáticamente a medida que completas tus etapas.
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-white/10 p-5 border border-white/10 shrink-0 text-center min-w-[140px]">
-            <p className="text-xs uppercase tracking-wider text-white/60">
-              Progreso Total
-            </p>
-            <p className="font-display text-4xl font-bold text-brand-red mt-1">
-              {metrics.progressPercentage}%
-            </p>
-          </div>
-        </div>
-
-        {/* Grid Bento Box con Semáforo Verde / Amarillo / Rojo */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Link
-            href="/dashboard/formulario"
-            className="group flex flex-col justify-between rounded-2xl bg-brand-white p-6 border border-brand-platinum shadow-sm hover:shadow-md transition-all hover:-translate-y-1"
-          >
-            <div>
-              <div className="flex items-center justify-between">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-platinum text-brand-charcoal group-hover:bg-brand-red group-hover:text-brand-white transition-colors">
-                  <FileText className="h-6 w-6" />
-                </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-bold ${badgeStep1.classes}`}
-                >
-                  {badgeStep1.label}
+        {/* BANNER PRINCIPAL CON SALUDO EN DOS LÍNEAS */}
+        <div className="rounded-3xl bg-brand-charcoal text-brand-white p-6 sm:p-8 border border-white/10 shadow-lg space-y-6">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+            <div className="space-y-2 max-w-2xl">
+              <div className="inline-flex items-center gap-2 rounded-full bg-brand-red/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-brand-red">
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>
+                  EXPEDIENTE OFICIAL •{" "}
+                  {isJapan ? "🇯🇵 JAPÓN (MOFA)" : "🇺🇸 ESTADOS UNIDOS (B1/B2)"}
                 </span>
               </div>
-              <h3 className="font-display text-xl font-bold text-brand-charcoal mt-6">
-                1. Cuestionario Estratégico
-              </h3>
-              <p className="text-xs text-brand-charcoal/70 mt-2 leading-relaxed">
-                Completa en 3 minutos los datos que no aparecen en tus certificados para que redactemos tu aplicación.
+
+              <div className="space-y-1 pt-0.5">
+                <h2 className="font-display text-2xl sm:text-3xl font-bold text-white leading-tight">
+                  Hola, {clientName}
+                </h2>
+                <p className="text-sm sm:text-base font-medium text-white/80">
+                  Así avanza tu solicitud consular en tiempo real.
+                </p>
+              </div>
+
+              <p className="text-xs text-white/70 pt-1">
+                Plan contratado:{" "}
+                <strong className="text-white">
+                  {application?.planTier || profile?.planTier || "Priority Pro"}
+                </strong>{" "}
+                • Asesor asignado:{" "}
+                <strong className="text-emerald-400">
+                  {assignedAdvisorName || "Pendiente de asignación"}
+                </strong>
               </p>
             </div>
 
-            <div className="mt-8 flex items-center justify-between pt-4 border-t border-brand-platinum text-xs font-semibold text-brand-red">
-              <span>Abrir cuestionario</span>
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+            <div className="w-full lg:w-72 rounded-2xl bg-white/5 border border-white/10 p-5 space-y-2.5 shrink-0">
+              <div className="flex items-center justify-between text-xs font-bold">
+                <span className="text-white/80">Progreso General</span>
+                <span className="font-display text-xl text-brand-red">
+                  {metrics.progressPercentage}%
+                </span>
+              </div>
+              <div className="h-2.5 w-full rounded-full bg-white/10 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-brand-red transition-all duration-500"
+                  style={{ width: `${metrics.progressPercentage}%` }}
+                />
+              </div>
+              <p className="text-[11px] text-white/65 flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+                <span>
+                  Etapa {metrics.currentStep} de 4 • Estatus:{" "}
+                  <strong className="uppercase text-white">
+                    {metrics.autoStatus}
+                  </strong>
+                </span>
+              </p>
+            </div>
+          </div>
+
+          {/* LÍNEA DE TIEMPO DE LAS 4 ETAPAS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
+            {steps.map((st) => {
+              const isCompleted = metrics.currentStep > st.num;
+              const isCurrent = metrics.currentStep === st.num;
+              return (
+                <Link
+                  key={st.num}
+                  href={st.href}
+                  className={`rounded-2xl p-4 border transition-all flex flex-col justify-between gap-3 ${
+                    isCurrent
+                      ? "bg-brand-red text-white border-brand-red shadow-md"
+                      : isCompleted
+                      ? "bg-white/10 text-white border-emerald-400/40 hover:bg-white/15"
+                      : "bg-white/[0.04] text-white/70 border-white/10 hover:bg-white/10"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[10px] font-extrabold uppercase">
+                      PASO 0{st.num}
+                    </span>
+                    {isCompleted ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                    ) : (
+                      <Clock className="h-4 w-4 opacity-75" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-display text-xs font-bold">{st.title}</p>
+                    <p className="text-[11px] opacity-80 mt-0.5 leading-snug">
+                      {st.desc}
+                    </p>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* TARJETAS DE ACCIÓN RÁPIDA */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <Link
+            href="/dashboard/formulario"
+            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all"
+          >
+            <div className="space-y-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-charcoal group-hover:bg-brand-red text-white transition-colors">
+                <FileText className="h-5 w-5" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-brand-charcoal">
+                Formulario Inteligente
+              </h3>
+              <p className="text-xs text-brand-charcoal/75 leading-relaxed">
+                {isJapan
+                  ? "Completa en español tus datos de viaje y alojamiento para estructurar tu formulario MOFA y Schedule of Stay."
+                  : "Diligencia en español tu información personal, laboral y de viaje para la radicación técnica de tu DS-160."}
+              </p>
+            </div>
+            <div className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-red">
+              <span>Abrir Formulario ({metrics.formCompletedCount} campos)</span>
+              <ArrowRight className="h-3.5 w-3.5" />
             </div>
           </Link>
 
           <Link
             href="/dashboard/boveda"
-            className="group flex flex-col justify-between rounded-2xl bg-brand-white p-6 border border-brand-platinum shadow-sm hover:shadow-md transition-all hover:-translate-y-1"
+            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all"
           >
-            <div>
-              <div className="flex items-center justify-between">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-platinum text-brand-charcoal group-hover:bg-brand-red group-hover:text-brand-white transition-colors">
-                  <FolderLock className="h-6 w-6" />
-                </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-bold ${badgeStep2.classes}`}
-                >
-                  {badgeStep2.label}
-                </span>
+            <div className="space-y-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-charcoal group-hover:bg-brand-red text-white transition-colors">
+                <FolderLock className="h-5 w-5" />
               </div>
-              <h3 className="font-display text-xl font-bold text-brand-charcoal mt-6">
-                2. Bóveda de Documentos
+              <h3 className="font-display text-lg font-bold text-brand-charcoal">
+                Bóveda de Documentos
               </h3>
-              <p className="text-xs text-brand-charcoal/70 mt-2 leading-relaxed">
-                Sube tu pasaporte vigente y soportes financieros con encriptación de nivel bancario.
+              <p className="text-xs text-brand-charcoal/75 leading-relaxed">
+                Sube tu pasaporte, foto consular y soportes financieros con
+                cifrado Zero-Trust y purga automática de metadatos GPS.
               </p>
             </div>
-
-            <div className="mt-8 flex items-center justify-between pt-4 border-t border-brand-platinum text-xs font-semibold text-brand-red">
-              <span>Gestionar archivos</span>
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+            <div className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-red">
+              <span>
+                Gestionar Soportes ({metrics.uploadedDocsCount}/
+                {metrics.requiredDocsTotal})
+              </span>
+              <ArrowRight className="h-3.5 w-3.5" />
             </div>
           </Link>
 
           <Link
             href="/dashboard/sala-entrenamiento"
-            className="group flex flex-col justify-between rounded-2xl bg-brand-white p-6 border border-brand-platinum shadow-sm hover:shadow-md transition-all hover:-translate-y-1"
+            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all"
           >
-            <div>
-              <div className="flex items-center justify-between">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-platinum text-brand-charcoal group-hover:bg-brand-red group-hover:text-brand-white transition-colors">
-                  <Award className="h-6 w-6" />
-                </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-bold ${badgeStep3.classes}`}
-                >
-                  {badgeStep3.label}
-                </span>
+            <div className="space-y-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-charcoal group-hover:bg-brand-red text-white transition-colors">
+                <Award className="h-5 w-5" />
               </div>
-              <h3 className="font-display text-xl font-bold text-brand-charcoal mt-6">
-                3. Sala Consular & Citas
+              <h3 className="font-display text-lg font-bold text-brand-charcoal">
+                Sala Consular 1-a-1
               </h3>
-              <p className="text-xs text-brand-charcoal/70 mt-2 leading-relaxed">
-                Videos de preparación, entregables de tus reuniones y agendamiento 1-a-1 con tu asesor asignado.
+              <p className="text-xs text-brand-charcoal/75 leading-relaxed">
+                Accede a tus sesiones programadas en Google Meet con tu
+                especialista y estudia las guías estratégicas de tu ruta.
               </p>
             </div>
-
-            <div className="mt-8 flex items-center justify-between pt-4 border-t border-brand-platinum text-xs font-semibold text-brand-red">
-              <span>Entrar a la sala</span>
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+            <div className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-red">
+              <span>Ir a la Sala Consular ({meetings.length} sesiones)</span>
+              <ArrowRight className="h-3.5 w-3.5" />
             </div>
           </Link>
         </div>
 
-        {/* Línea de Tiempo Completa con las 4 Etapas Reales */}
-        <div className="rounded-2xl bg-brand-white p-8 border border-brand-platinum shadow-sm space-y-5">
-          <div className="flex items-center justify-between">
-            <h3 className="font-display text-xl font-bold text-brand-charcoal">
-              Estado de Etapas en Tiempo Real
-            </h3>
-            <span className="text-xs font-semibold text-brand-charcoal/55">
-              Paso {metrics.currentStep} de 4
-            </span>
+        {/* RESUMEN DE ENTREGABLES Y ASESORÍA TITULAR (CON FOTO REAL DEL ASESOR Y REUNIONES) */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 shadow-2xs space-y-4">
+            <div className="flex items-center justify-between border-b border-brand-platinum pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <Download className="h-4 w-4 text-brand-red" />
+                <h3 className="font-display text-sm font-bold text-brand-charcoal">
+                  Entregables Oficiales Listos ({deliverables.length})
+                </h3>
+              </div>
+              <Link
+                href="/dashboard/perfil"
+                className="text-xs font-bold text-brand-red hover:underline"
+              >
+                Ver todos →
+              </Link>
+            </div>
+
+            {deliverables.length === 0 ? (
+              <p className="text-xs text-brand-charcoal/65 py-4">
+                Tus documentos oficiales (Confirmación DS-160 / Schedule of
+                Stay) aparecerán aquí tan pronto tu especialista los emita.
+              </p>
+            ) : (
+              <div className="space-y-2.5">
+                {deliverables.slice(0, 3).map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-center justify-between rounded-xl bg-brand-platinum/50 px-4 py-3 text-xs"
+                  >
+                    <span className="font-bold text-brand-charcoal truncate pr-3">
+                      {d.label}
+                    </span>
+                    <a
+                      href={d.fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-full bg-brand-red px-3.5 py-1.5 text-[11px] font-bold text-white shrink-0"
+                    >
+                      Descargar
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {/* Etapa 1 */}
-            <div className="flex items-start gap-3.5 p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/25">
-              <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-bold text-brand-charcoal">
-                    Etapa 1: Admisión y Provisionamiento
-                  </p>
-                  <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                    Completado
-                  </span>
-                </div>
-                <p className="text-xs text-brand-charcoal/60 mt-1">
-                  Expediente digital activo y protegido bajo aislamiento criptográfico.
-                </p>
+          <div className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 shadow-2xs space-y-4">
+            <div className="flex items-center justify-between border-b border-brand-platinum pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <Calendar className="h-4 w-4 text-brand-red" />
+                <h3 className="font-display text-sm font-bold text-brand-charcoal">
+                  Asesoría Titular & Sesiones ({meetings.length})
+                </h3>
               </div>
+              <Link
+                href="/dashboard/sala-entrenamiento"
+                className="text-xs font-bold text-brand-red hover:underline"
+              >
+                Ir a Sala Consular →
+              </Link>
             </div>
 
-            {/* Etapa 2 */}
-            <div className={`flex items-start gap-3.5 p-4 rounded-xl border ${badgeStep1.rowClasses}`}>
-              {metrics.formSemaphore === "completed" ? (
-                <CheckCircle2 className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep1.iconColor}`} />
-              ) : metrics.formSemaphore === "in_progress" ? (
-                <Clock className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep1.iconColor}`} />
-              ) : (
-                <AlertCircle className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep1.iconColor}`} />
-              )}
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-bold text-brand-charcoal">
-                    Etapa 2: Cuestionario Estratégico
-                  </p>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${badgeStep1.classes}`}>
-                    {badgeStep1.label}
-                  </span>
+            {/* Ficha del Asesor con su Fotografía Real */}
+            <div className="flex items-center justify-between rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10">
+              <div className="flex items-center gap-3.5">
+                <div className="relative shrink-0">
+                  {advisorAvatar ? (
+                    <img
+                      src={advisorAvatar}
+                      alt={assignedAdvisorName || "Asesor"}
+                      width={44}
+                      height={44}
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      className="h-11 w-11 rounded-xl object-cover border border-brand-charcoal/15 shadow-2xs"
+                    />
+                  ) : (
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-charcoal text-white font-display text-sm font-bold">
+                      {assignedAdvisorName ? (
+                        assignedAdvisorName.charAt(0).toUpperCase()
+                      ) : (
+                        <UserCheck className="h-5 w-5" />
+                      )}
+                    </div>
+                  )}
+                  {assignedAdvisorName && (
+                    <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-white" />
+                  )}
                 </div>
-                <p className="text-xs text-brand-charcoal/60 mt-1">
-                  Recolección de información personal, laboral y plan de viaje.
-                </p>
+
+                <div>
+                  <p className="text-xs font-bold text-brand-charcoal">
+                    {assignedAdvisorName || "Sin asesor asignado aún"}
+                  </p>
+                  <p className="text-[11px] text-brand-charcoal/65">
+                    {application?.assignedAdvisorEmail ||
+                      (assignedAdvisorName
+                        ? "Asesor Legal Titular • Supervisión activa"
+                        : "En bolsa de asignación prioritaria")}
+                  </p>
+                </div>
               </div>
+              <span
+                className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase ${
+                  assignedAdvisorName
+                    ? "bg-emerald-500/15 text-emerald-800"
+                    : "bg-amber-500/15 text-amber-800"
+                }`}
+              >
+                {assignedAdvisorName ? "Asignado" : "En Bolsa"}
+              </span>
             </div>
 
-            {/* Etapa 3 */}
-            <div className={`flex items-start gap-3.5 p-4 rounded-xl border ${badgeStep2.rowClasses}`}>
-              {metrics.vaultSemaphore === "completed" ? (
-                <CheckCircle2 className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep2.iconColor}`} />
-              ) : metrics.vaultSemaphore === "in_progress" ? (
-                <Clock className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep2.iconColor}`} />
-              ) : (
-                <AlertCircle className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep2.iconColor}`} />
-              )}
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-bold text-brand-charcoal">
-                    Etapa 3: Bóveda y Auditoría Documental
-                  </p>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${badgeStep2.classes}`}>
-                    {badgeStep2.label}
-                  </span>
-                </div>
-                <p className="text-xs text-brand-charcoal/60 mt-1">
-                  Carga y verificación legal de pasaporte, fotografía y solvencia financiera.
-                </p>
+            {/* Lista de Reuniones Agendadas visibles directamente desde el Resumen */}
+            {meetings.length > 0 && (
+              <div className="space-y-2 pt-1">
+                {meetings.slice(0, 2).map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between gap-3 rounded-xl bg-brand-platinum/30 px-3.5 py-2.5 border border-brand-charcoal/10 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-bold text-brand-charcoal truncate">
+                        {m.title}
+                      </p>
+                      <p className="text-[11px] text-brand-charcoal/65">
+                        {new Date(m.dateTime).toLocaleString("es-CO", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}
+                      </p>
+                    </div>
+                    {m.meetUrl && (
+                      <a
+                        href={m.meetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-full bg-brand-charcoal hover:bg-brand-red px-3 py-1.5 text-[11px] font-bold text-white shrink-0 transition-colors"
+                      >
+                        <Video className="h-3 w-3" />
+                        <span>Meet</span>
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    )}
+                  </div>
+                ))}
               </div>
-            </div>
-
-            {/* Etapa 4 */}
-            <div className={`flex items-start gap-3.5 p-4 rounded-xl border ${badgeStep3.rowClasses}`}>
-              {metrics.consularSemaphore === "completed" ? (
-                <CheckCircle2 className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep3.iconColor}`} />
-              ) : metrics.consularSemaphore === "in_progress" ? (
-                <Clock className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep3.iconColor}`} />
-              ) : (
-                <AlertCircle className={`h-5 w-5 shrink-0 mt-0.5 ${badgeStep3.iconColor}`} />
-              )}
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-bold text-brand-charcoal">
-                    Etapa 4: Sala Consular & Entregables
-                  </p>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${badgeStep3.classes}`}>
-                    {badgeStep3.label}
-                  </span>
-                </div>
-                <p className="text-xs text-brand-charcoal/60 mt-1">
-                  Sesión 1-a-1 con tu especialista y entrega de formularios oficiales listos.
-                </p>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>

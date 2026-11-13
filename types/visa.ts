@@ -99,7 +99,6 @@ export interface AppNotification {
 }
 
 export interface SmartFormData {
-  // Datos Personales &Contacto
   fullName?: string;
   nationalId?: string;
   birthDate?: string;
@@ -107,42 +106,31 @@ export interface SmartFormData {
   mobilePhone?: string;
   homeAddress?: string;
   city?: string;
-
-  // Pasaporte
   passportNumber?: string;
   passportIssueDate?: string;
   passportExpiryDate?: string;
-
-  // Propósito del Viaje
   intendedArrivalDate?: string;
   intendedStayDuration?: string;
   destinationCities?: string;
   accommodationDetails?: string;
   tripPayer?: string;
   travelCompanions?: string;
-
-  // Arraigo Laboral & Financiero
   currentOccupation?: string;
   employerOrBusinessName?: string;
   jobTitle?: string;
   monthlyIncomeCop?: string;
   yearsInCurrentActivity?: string;
   workDescription?: string;
-
-  // Historial Migratorio & Familia
   previousUsaVisa?: string;
   previousVisaRefusal?: string;
   refusalExplanation?: string;
   internationalTravelHistory?: string;
   relativesInDestination?: string;
   securityBackgroundDeclaration?: string;
-
-  // Específicos Japón (Schedule of Stay)
   japanEntryPort?: string;
   japanAirlineOrFlight?: string;
   japanDailyItinerarySummary?: string;
   japanGuarantorOrInviter?: string;
-
   [key: string]: any;
 }
 
@@ -160,6 +148,7 @@ export interface VisaApplication {
   assignedAdvisorId?: string;
   assignedAdvisorName?: string;
   assignedAdvisorEmail?: string;
+  assignedAdvisorPhotoUrl?: string;
   assignedAdvisorBookingUrl?: string;
   consularAttempt?: number;
   archivedAttempts?: {
@@ -179,6 +168,8 @@ export interface VisaApplication {
   createdAt: string;
 }
 
+export type ReactionType = "helpful" | "fire" | "clap" | "bulb";
+
 export interface ConsularResourceItem {
   id: string;
   title: string;
@@ -187,12 +178,10 @@ export interface ConsularResourceItem {
   destination: DestinationCountry | "ALL";
   url?: string;
   storagePath?: string;
+  upvotedBy?: string[];
+  reactions?: Partial<Record<ReactionType, string[]>>;
   updatedAt: string;
 }
-
-// ============================================================================
-// TIPOS PARA LA BITÁCORA MAESTRA DE AUDITORÍA & LOGS SIEM (SOLO ADMINS)
-// ============================================================================
 
 export type SystemLogCategory =
   | "SECURITY_AUTH"

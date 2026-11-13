@@ -1,175 +1,190 @@
 // context/AuthContext.tsx
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  ReactNode,
+} from "react";
 import {
   User,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
+   signInWithPopup,
   GoogleAuthProvider,
-  signInWithPopup,
-  setPersistence,
-  browserLocalPersistence,
   signOut as firebaseSignOut,
+  sendPasswordResetEmail,
 } from "firebase/auth";
-import { doc, getDoc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, onSnapshot, updateDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase/config";
-import { initializeUserAndApplication } from "@/lib/firebase/db";
-import { PreApprovedUser, UserProfile, VisaApplication } from "@/types/visa";
+import {
+  PreApprovedUser,
+  UserProfile,
+  UserRole,
+  VisaApplication,
+} from "@/types/visa";
+import {
+  formatDisplayName,
+  initializeUserAndApplication,
+  recordSystemLog,
+} from "@/lib/firebase/db";
 
-const SESSION_MAX_DURATION_MS = 8 * 60 * 60 * 1000; // 8 Horas
-const SESSION_STORAGE_KEY = "gvc_session_issued_at";
+interface SignInResult {
+  role: UserRole;
+  fullName: string;
+  email: string;
+  requiresTwoFactor: boolean;
+}
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   application: VisaApplication | null;
   loading: boolean;
+  isTwoFactorVerified: boolean;
+  completeTwoFactorVerification: () => Promise<void>;
   simulateClientView: boolean;
   setSimulateClientView: (val: boolean) => void;
-  signIn: (email: string, pass: string) => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
+  signIn: (email: string, password: string) => Promise<SignInResult>;
+  signInWithGoogle: () => Promise<SignInResult>;
   requestPasswordReset: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
-  refreshApplication: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  profile: null,
+  application: null,
+  loading: true,
+  isTwoFactorVerified: false,
+  completeTwoFactorVerification: async () => {},
+  simulateClientView: false,
+  setSimulateClientView: () => {},
+  signIn: async () => ({
+    role: "client",
+    fullName: "",
+    email: "",
+    requiresTwoFactor: true,
+  }),
+  signInWithGoogle: async () => ({
+    role: "client",
+    fullName: "",
+    email: "",
+    requiresTwoFactor: false,
+  }),
+  requestPasswordReset: async () => {},
+  signOut: async () => {},
+});
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+const SESSION_START_KEY = "gvc_session_start";
+const SIMULATE_CLIENT_KEY = "gvc_simulate_client_view";
+const TWO_FACTOR_VERIFIED_KEY = "gvc_2fa_verified";
+const MAX_SESSION_MS = 8 * 60 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [application, setApplication] = useState<VisaApplication | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [simulateClientView, setSimulateClientViewState] = useState(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [isTwoFactorVerified, setIsTwoFactorVerified] =
+    useState<boolean>(false);
+  const [simulateClientView, setSimulateClientViewState] =
+    useState<boolean>(false);
+
+  const unsubProfileRef = useRef<(() => void) | null>(null);
+  const unsubAppRef = useRef<(() => void) | null>(null);
+
+  const cleanupFirestoreStreams = () => {
+    if (unsubProfileRef.current) {
+      unsubProfileRef.current();
+      unsubProfileRef.current = null;
+    }
+    if (unsubAppRef.current) {
+      unsubAppRef.current();
+      unsubAppRef.current = null;
+    }
+  };
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const saved = sessionStorage.getItem("gvc_simulate_client");
-      if (saved === "true") {
-        setSimulateClientViewState(true);
-      }
+    if (typeof window === "undefined") return;
+    const savedSim = localStorage.getItem(SIMULATE_CLIENT_KEY);
+    if (savedSim === "true") {
+      setSimulateClientViewState(true);
     }
-    // Garantizar persistencia local de sesión en todas las rutas del navegador
-    setPersistence(auth, browserLocalPersistence).catch(() => {});
+    const saved2FA = sessionStorage.getItem(TWO_FACTOR_VERIFIED_KEY);
+    if (saved2FA === "true") {
+      setIsTwoFactorVerified(true);
+    }
   }, []);
+
+  // Cierre F-05: Sella en Firestore que el usuario superó el 2FA para que firestore.rules permita leer applications/{uid}
+  const completeTwoFactorVerification = async () => {
+    setIsTwoFactorVerified(true);
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
+    }
+    if (auth.currentUser) {
+      try {
+        await updateDoc(doc(db, "users", auth.currentUser.uid), {
+          twoFactorVerified: true,
+          twoFactorVerifiedAt: new Date().toISOString(),
+        });
+      } catch {}
+    }
+  };
 
   const setSimulateClientView = (val: boolean) => {
     setSimulateClientViewState(val);
     if (typeof window !== "undefined") {
-      sessionStorage.setItem("gvc_simulate_client", String(val));
+      localStorage.setItem(SIMULATE_CLIENT_KEY, String(val));
     }
   };
 
-  const stampSessionStart = () => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(SESSION_STORAGE_KEY, String(Date.now()));
-    }
-  };
+  const checkAllowedEmail = async (
+    rawEmail: string
+  ): Promise<PreApprovedUser | null> => {
+    const cleanEmail = rawEmail.trim().toLowerCase();
+    if (!cleanEmail) return null;
 
-  const clearSessionStamp = () => {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(SESSION_STORAGE_KEY);
-      sessionStorage.removeItem("gvc_simulate_client");
-    }
-  };
-
-  const ensureUserInitialized = async (currentUser: User): Promise<boolean> => {
     try {
-      const userSnap = await getDoc(doc(db, "users", currentUser.uid));
-      const appSnap = await getDoc(doc(db, "applications", currentUser.uid));
-
-      if (userSnap.exists() && appSnap.exists()) {
-        return true;
+      const allowedRef = doc(db, "allowed_emails", cleanEmail);
+      const snap = await getDoc(allowedRef);
+      if (snap.exists()) {
+        return snap.data() as PreApprovedUser;
       }
-
-      const emailLower = (currentUser.email || "").trim().toLowerCase();
-      if (!emailLower) {
-        await firebaseSignOut(auth);
-        return false;
-      }
-
-      const allowedSnap = await getDoc(doc(db, "allowed_emails", emailLower));
-
-      if (allowedSnap.exists()) {
-        const preData = allowedSnap.data() as PreApprovedUser;
-        await initializeUserAndApplication(
-          currentUser.uid,
-          emailLower,
-          preData.fullName || currentUser.displayName || "Usuario Autorizado",
-          preData.destination || "USA",
-          preData.role || "client",
-          preData.planTier || "Priority Pro"
-        );
-        return true;
-      }
-
-      await firebaseSignOut(auth);
-      return false;
-    } catch {
-      await firebaseSignOut(auth);
-      return false;
-    }
+    } catch {}
+    return null;
   };
 
-  // Vigilante de Expiración y Renovación de Token cada 8 Horas
   useEffect(() => {
-    if (!user || typeof window === "undefined") return;
+    const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      cleanupFirestoreStreams();
 
-    const checkAndRotateToken = async () => {
-      const issuedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
-      const now = Date.now();
-
-      if (!issuedRaw) {
-        stampSessionStart();
-        return;
-      }
-
-      const elapsed = now - Number(issuedRaw);
-
-      if (elapsed >= SESSION_MAX_DURATION_MS) {
-        try {
-          await user.getIdToken(true);
-        } catch {}
-        clearSessionStamp();
-        setSimulateClientViewState(false);
-        await firebaseSignOut(auth);
+      if (!firebaseUser || !firebaseUser.email) {
         setUser(null);
         setProfile(null);
         setApplication(null);
-        window.location.href = "/login?reason=session_expired";
+        setIsTwoFactorVerified(false);
+        setLoading(false);
+        return;
       }
-    };
 
-    checkAndRotateToken();
+      setLoading(true);
 
-    const interval = setInterval(checkAndRotateToken, 60 * 1000);
-    window.addEventListener("focus", checkAndRotateToken);
+      try {
+        const cleanEmail = firebaseUser.email.trim().toLowerCase();
+        const userRef = doc(db, "users", firebaseUser.uid);
+        let existingUserSnap = await getDoc(userRef);
 
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("focus", checkAndRotateToken);
-    };
-  }, [user]);
+        if (!existingUserSnap.exists()) {
+          const allowedData = await checkAllowedEmail(cleanEmail);
 
-  useEffect(() => {
-    let unsubUser: (() => void) | null = null;
-    let unsubApp: (() => void) | null = null;
-
-    const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
-      if (unsubUser) unsubUser();
-      if (unsubApp) unsubApp();
-
-      if (currentUser) {
-        if (typeof window !== "undefined") {
-          const issuedRaw = localStorage.getItem(SESSION_STORAGE_KEY);
-          if (
-            issuedRaw &&
-            Date.now() - Number(issuedRaw) >= SESSION_MAX_DURATION_MS
-          ) {
-            clearSessionStamp();
+          if (!allowedData) {
+            cleanupFirestoreStreams();
             await firebaseSignOut(auth);
             setUser(null);
             setProfile(null);
@@ -177,141 +192,419 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setLoading(false);
             return;
           }
-          if (!issuedRaw) {
-            stampSessionStart();
+
+          await initializeUserAndApplication(
+            firebaseUser.uid,
+            cleanEmail,
+            allowedData.fullName ||
+              firebaseUser.displayName ||
+              "Titular Autorizado",
+            allowedData.destination || "USA",
+            allowedData.role || "client",
+            allowedData.planTier || "Priority Pro"
+          );
+          existingUserSnap = await getDoc(userRef);
+        }
+
+        if (
+          typeof window !== "undefined" &&
+          !localStorage.getItem(SESSION_START_KEY)
+        ) {
+          localStorage.setItem(SESSION_START_KEY, String(Date.now()));
+        }
+
+        const isGoogleProvider = firebaseUser.providerData.some(
+          (p) => p.providerId === "google.com"
+        );
+        if (isGoogleProvider) {
+          setIsTwoFactorVerified(true);
+          if (typeof window !== "undefined") {
+            sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
           }
         }
 
-        const isValid = await ensureUserInitialized(currentUser);
-        if (isValid) {
-          setUser(currentUser);
-
-          let userReady = false;
-          let appReady = false;
-
-          unsubUser = onSnapshot(doc(db, "users", currentUser.uid), (snap) => {
-            if (snap.exists()) {
-              const userData = snap.data() as UserProfile;
-              if (!userData.role) userData.role = "client";
-              setProfile(userData);
+        if (existingUserSnap.exists()) {
+          const pData = existingUserSnap.data() as UserProfile & {
+            twoFactorVerified?: boolean;
+          };
+          setProfile(pData);
+          if (pData.twoFactorVerified && typeof window !== "undefined") {
+            if (sessionStorage.getItem(TWO_FACTOR_VERIFIED_KEY) === "true") {
+              setIsTwoFactorVerified(true);
             }
-            userReady = true;
-            if (userReady && appReady) setLoading(false);
-          });
-
-          unsubApp = onSnapshot(
-            doc(db, "applications", currentUser.uid),
-            (snap) => {
-              if (snap.exists()) {
-                setApplication(snap.data() as VisaApplication);
-              }
-              appReady = true;
-              if (userReady && appReady) setLoading(false);
-            }
-          );
-        } else {
-          setUser(null);
-          setProfile(null);
-          setApplication(null);
-          setLoading(false);
+          }
         }
-      } else {
-        setUser(null);
-        setProfile(null);
-        setApplication(null);
+        setUser(firebaseUser);
+
+        unsubProfileRef.current = onSnapshot(
+          doc(db, "users", firebaseUser.uid),
+          (snap) => {
+            if (snap.exists()) {
+              setProfile(snap.data() as UserProfile);
+            }
+            setLoading(false);
+          },
+          () => {
+            setLoading(false);
+          }
+        );
+      } catch {
         setLoading(false);
       }
     });
 
     return () => {
-      if (unsubUser) unsubUser();
-      if (unsubApp) unsubApp();
-      unsubscribeAuth();
+      unsubAuth();
+      cleanupFirestoreStreams();
     };
   }, []);
 
-  const signIn = async (email: string, pass: string) => {
-    const cleanEmail = email.trim().toLowerCase();
-    await setPersistence(auth, browserLocalPersistence);
-    const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
-    const isValid = await ensureUserInitialized(cred.user);
-    if (!isValid) {
-      throw new Error("UNREGISTERED_USER");
+  // Cierre F-05: Solo abrimos la suscripción al expediente (applications/{uid}) cuando el 2FA ya está verificado
+  useEffect(() => {
+    if (unsubAppRef.current) {
+      unsubAppRef.current();
+      unsubAppRef.current = null;
     }
-    await cred.user.getIdToken(true);
-    stampSessionStart();
-    setUser(cred.user);
-  };
 
-  const signInWithGoogle = async () => {
-    await setPersistence(auth, browserLocalPersistence);
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
-    const cred = await signInWithPopup(auth, provider);
-    const isValid = await ensureUserInitialized(cred.user);
-    if (!isValid) {
-      throw new Error("UNREGISTERED_USER");
+    if (!user || !isTwoFactorVerified) {
+      setApplication(null);
+      return;
     }
-    await cred.user.getIdToken(true);
-    stampSessionStart();
-    setUser(cred.user);
-  };
 
-  const requestPasswordReset = async (rawEmail: string) => {
-    const cleanEmail = rawEmail.trim().toLowerCase();
-    if (!cleanEmail) return;
+    unsubAppRef.current = onSnapshot(
+      doc(db, "applications", user.uid),
+      (snap) => {
+        if (snap.exists()) {
+          setApplication(snap.data() as VisaApplication);
+        } else {
+          setApplication(null);
+        }
+      },
+      () => {}
+    );
 
-    const actionCodeSettings = {
-      url:
-        typeof window !== "undefined"
-          ? `${window.location.origin}/reset-password`
-          : "http://localhost:3000/reset-password",
-      handleCodeInApp: false,
+    return () => {
+      if (unsubAppRef.current) {
+        unsubAppRef.current();
+        unsubAppRef.current = null;
+      }
+    };
+  }, [user, isTwoFactorVerified]);
+
+  useEffect(() => {
+    if (!user || typeof window === "undefined") return;
+
+    const now = Date.now();
+    const savedStart = Number(localStorage.getItem(SESSION_START_KEY) || "0");
+    if (!savedStart) {
+      localStorage.setItem(SESSION_START_KEY, String(now));
+    }
+
+    let idleTimer: ReturnType<typeof setTimeout>;
+
+    const enforceZeroTrustLogout = async (reason: string) => {
+      try {
+        await updateDoc(doc(db, "users", user.uid), {
+          twoFactorVerified: false,
+        });
+        await recordSystemLog({
+          category: "SECURITY_AUTH",
+          eventType: "Expiración Automática de Sesión (Zero-Trust)",
+          outcome: "INFO",
+          actorEmail: user.email || "usuario",
+          actorName: profile?.fullName || user.displayName || "Usuario",
+          actorRole: profile?.role || "client",
+          targetResource: "Token de Sesión 8h",
+          details: reason,
+        });
+      } catch {}
+      localStorage.removeItem(SESSION_START_KEY);
+      localStorage.removeItem(SIMULATE_CLIENT_KEY);
+      sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+      setIsTwoFactorVerified(false);
+      setSimulateClientViewState(false);
+      cleanupFirestoreStreams();
+      await firebaseSignOut(auth);
     };
 
-    try {
-      const allowedSnap = await getDoc(doc(db, "allowed_emails", cleanEmail));
-      if (!allowedSnap.exists()) {
+    const resetIdleTimer = () => {
+      clearTimeout(idleTimer);
+
+      const startTimestamp = Number(
+        localStorage.getItem(SESSION_START_KEY) || String(Date.now())
+      );
+
+      if (Date.now() - startTimestamp >= MAX_SESSION_MS) {
+        enforceZeroTrustLogout(
+          "La sesión alcanzó el límite máximo permitido de 8 horas continuas."
+        );
         return;
       }
 
-      try {
-        await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
-      } catch (err: any) {
-        if (
-          err?.code === "auth/user-not-found" ||
-          err?.code === "auth/invalid-email"
-        ) {
-          const randomEntropy = `Gvc#${crypto.randomUUID()}!9a`;
-          const newCred = await createUserWithEmailAndPassword(
-            auth,
-            cleanEmail,
-            randomEntropy
-          );
-          await ensureUserInitialized(newCred.user);
-          await firebaseSignOut(auth);
-          await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
-        }
+      idleTimer = setTimeout(() => {
+        enforceZeroTrustLogout(
+          "Sesión cerrada automáticamente tras 30 minutos de inactividad."
+        );
+      }, IDLE_TIMEOUT_MS);
+    };
+
+    const activityEvents = ["mousedown", "keydown", "scroll", "touchstart"];
+    activityEvents.forEach((ev) =>
+      window.addEventListener(ev, resetIdleTimer, { passive: true })
+    );
+    resetIdleTimer();
+
+    return () => {
+      clearTimeout(idleTimer);
+      activityEvents.forEach((ev) =>
+        window.removeEventListener(ev, resetIdleTimer)
+      );
+    };
+  }, [user, profile]);
+
+  const signIn = async (
+    email: string,
+    password: string
+  ): Promise<SignInResult> => {
+    const cleanEmail = email.trim().toLowerCase();
+
+    try {
+      // Cierre F-06: Primero autenticamos en Firebase Auth antes de leer allowed_emails
+      const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+
+      const allowedData = await checkAllowedEmail(cleanEmail);
+      let userSnap = await getDoc(doc(db, "users", cred.user.uid));
+
+      if (!allowedData && !userSnap.exists()) {
+        cleanupFirestoreStreams();
+        await firebaseSignOut(auth);
+        throw new Error("UNREGISTERED_USER");
       }
-    } catch {}
+
+      if (allowedData && !userSnap.exists()) {
+        await initializeUserAndApplication(
+          cred.user.uid,
+          cleanEmail,
+          allowedData.fullName || cred.user.displayName || "Titular Autorizado",
+          allowedData.destination || "USA",
+          allowedData.role || "client",
+          allowedData.planTier || "Priority Pro"
+        );
+        userSnap = await getDoc(doc(db, "users", cred.user.uid));
+      }
+
+      // Cierre F-05: Marcamos twoFactorVerified en false en Firestore hasta que supere el desafío 2FA
+      try {
+        await updateDoc(doc(db, "users", cred.user.uid), {
+          twoFactorVerified: false,
+        });
+      } catch {}
+
+      const loadedProfile = userSnap.exists()
+        ? (userSnap.data() as UserProfile)
+        : null;
+
+      setUser(cred.user);
+      if (loadedProfile) {
+        setProfile(loadedProfile);
+      }
+      setLoading(false);
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem(SESSION_START_KEY, String(Date.now()));
+        sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+      }
+      setIsTwoFactorVerified(false);
+
+      const resolvedRole: UserRole =
+        loadedProfile?.role || allowedData?.role || "client";
+      const resolvedName = formatDisplayName(
+        loadedProfile?.fullName ||
+          allowedData?.fullName ||
+          cred.user.displayName ||
+          cleanEmail
+      );
+
+      await recordSystemLog({
+        category: "SECURITY_AUTH",
+        eventType: "Credenciales Primarias Validadas (Pendiente 2FA)",
+        outcome: "INFO",
+        actorEmail: cleanEmail,
+        actorName: resolvedName,
+        actorRole: resolvedRole,
+        targetResource: "Firebase Auth • Factor Primario",
+        details:
+          "Contraseña verificada correctamente. Expediente bloqueado en Firestore hasta validar 2FA OTP.",
+      });
+
+      return {
+        role: resolvedRole,
+        fullName: resolvedName,
+        email: cleanEmail,
+        requiresTwoFactor: true,
+      };
+    } catch (err: any) {
+      await recordSystemLog({
+        category: "SECURITY_AUTH",
+        eventType: "Intento de Login Fallido",
+        outcome: "WARNING",
+        actorEmail: cleanEmail,
+        actorName: cleanEmail,
+        actorRole: "anonymous",
+        targetResource: "Portal de Acceso",
+        details:
+          "Credenciales inválidas o cuenta pendiente de configuración de clave.",
+      });
+      throw err;
+    }
   };
 
-  const signOut = async () => {
-    clearSessionStamp();
+  const signInWithGoogle = async (): Promise<SignInResult> => {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+
+    const cred = await signInWithPopup(auth, provider);
+    const cleanEmail = (cred.user.email || "").trim().toLowerCase();
+
+    const allowedData = await checkAllowedEmail(cleanEmail);
+    let userSnap = await getDoc(doc(db, "users", cred.user.uid));
+
+    if (!allowedData && !userSnap.exists()) {
+      cleanupFirestoreStreams();
+      await firebaseSignOut(auth);
+      await recordSystemLog({
+        category: "SECURITY_AUTH",
+        eventType: "Acceso Google Bloqueado (No Provisionado)",
+        outcome: "WARNING",
+        actorEmail: cleanEmail || "desconocido",
+        actorName: cred.user.displayName || cleanEmail,
+        actorRole: "anonymous",
+        targetResource: "Google OAuth 2.0",
+        details: `Cuenta de Google (${cleanEmail}) rechazada por no tener expediente activo.`,
+      });
+      throw new Error("UNREGISTERED_USER");
+    }
+
+    if (allowedData && !userSnap.exists()) {
+      await initializeUserAndApplication(
+        cred.user.uid,
+        cleanEmail,
+        allowedData.fullName || cred.user.displayName || "Titular Autorizado",
+        allowedData.destination || "USA",
+        allowedData.role || "client",
+        allowedData.planTier || "Priority Pro"
+      );
+      userSnap = await getDoc(doc(db, "users", cred.user.uid));
+    }
+
+    try {
+      await updateDoc(doc(db, "users", cred.user.uid), {
+        twoFactorVerified: true,
+        twoFactorVerifiedAt: new Date().toISOString(),
+      });
+    } catch {}
+
+    const loadedProfile = userSnap.exists()
+      ? (userSnap.data() as UserProfile)
+      : null;
+
+    setUser(cred.user);
+    if (loadedProfile) {
+      setProfile(loadedProfile);
+    }
+    setIsTwoFactorVerified(true);
+    setLoading(false);
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem(SESSION_START_KEY, String(Date.now()));
+      sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
+    }
+
+    const resolvedRole: UserRole =
+      loadedProfile?.role || allowedData?.role || "client";
+    const resolvedName = formatDisplayName(
+      loadedProfile?.fullName ||
+        allowedData?.fullName ||
+        cred.user.displayName ||
+        cleanEmail
+    );
+
+    await recordSystemLog({
+      category: "SECURITY_AUTH",
+      eventType: "Inicio de Sesión Exitoso (Google OAuth + MFA)",
+      outcome: "SUCCESS",
+      actorEmail: cleanEmail,
+      actorName: resolvedName,
+      actorRole: resolvedRole,
+      targetResource: "Google OAuth 2.0 • Token 8h",
+      details: "Autenticación federada con Google completada exitosamente.",
+    });
+
+    return {
+      role: resolvedRole,
+      fullName: resolvedName,
+      email: cleanEmail,
+      requiresTwoFactor: false,
+    };
+  };
+
+  const requestPasswordReset = async (email: string): Promise<void> => {
+    const cleanEmail = email.trim().toLowerCase();
+
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
+    } catch {}
+
+    await recordSystemLog({
+      category: "SECURITY_AUTH",
+      eventType: "Solicitud de Enlace Criptográfico de Contraseña",
+      outcome: "INFO",
+      actorEmail: cleanEmail,
+      actorName: cleanEmail,
+      actorRole: "anonymous",
+      targetResource: "Recuperación de Credenciales",
+      details: `Se procesó solicitud de enlace de contraseña para ${cleanEmail}.`,
+    });
+  };
+
+  const signOut = async (): Promise<void> => {
+    if (user?.uid) {
+      try {
+        await updateDoc(doc(db, "users", user.uid), {
+          twoFactorVerified: false,
+        });
+      } catch {}
+    }
+
+    if (user?.email) {
+      try {
+        await recordSystemLog({
+          category: "SECURITY_AUTH",
+          eventType: "Cierre de Sesión Manual",
+          outcome: "INFO",
+          actorEmail: user.email,
+          actorName: profile?.fullName || user.displayName || user.email,
+          actorRole: profile?.role || "client",
+          targetResource: "Sesión del Portal",
+          details: "El usuario cerró su sesión de forma segura.",
+        });
+      } catch {}
+    }
+
+    cleanupFirestoreStreams();
+
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(SESSION_START_KEY);
+      localStorage.removeItem(SIMULATE_CLIENT_KEY);
+      sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+    }
+    setIsTwoFactorVerified(false);
     setSimulateClientViewState(false);
+
     await firebaseSignOut(auth);
     setUser(null);
     setProfile(null);
     setApplication(null);
-  };
-
-  const refreshApplication = async () => {
-    if (user) {
-      const appSnap = await getDoc(doc(db, "applications", user.uid));
-      if (appSnap.exists()) {
-        setApplication(appSnap.data() as VisaApplication);
-      }
-    }
   };
 
   return (
@@ -321,13 +614,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profile,
         application,
         loading,
+        isTwoFactorVerified,
+        completeTwoFactorVerification,
         simulateClientView,
         setSimulateClientView,
         signIn,
         signInWithGoogle,
         requestPasswordReset,
         signOut,
-        refreshApplication,
       }}
     >
       {children}
@@ -335,10 +629,4 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth debe utilizarse dentro de un AuthProvider");
-  }
-  return context;
-}
+export const useAuth = () => useContext(AuthContext);

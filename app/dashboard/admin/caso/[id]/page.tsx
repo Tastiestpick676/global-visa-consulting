@@ -3,17 +3,18 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
-import { DocumentPreviewModal } from "@/components/dashboard/DocumentPreviewModal";
+import {
+  DashboardLayout,
+  DashboardContentSkeleton,
+} from "@/components/dashboard/DashboardLayout";
 import { useAuth } from "@/context/AuthContext";
 import { db, storage } from "@/lib/firebase/config";
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
-  onSnapshot,
   updateDoc,
-  deleteField,
 } from "firebase/firestore";
 import {
   ref,
@@ -23,1978 +24,1538 @@ import {
 } from "firebase/storage";
 import {
   ApplicationStatus,
-  CaseMeetingRecord,
   OfficialDeliverableItem,
+  ScheduledMeetingItem,
   UserProfile,
-  VaultDocument,
+  VaultDocumentItem,
   VisaApplication,
 } from "@/types/visa";
 import {
   buildAuditLogEntry,
   calculateApplicationMetrics,
+  downloadMeetingIcs,
   formatDisplayName,
+  getDefaultDocumentsByDestination,
+  getGoogleCalendarUrl,
+  recordSystemLog,
   sendInternalNotification,
+  sendTransactionalEmail,
 } from "@/lib/firebase/db";
 import {
   ArrowLeft,
-  CheckCircle2,
-  AlertCircle,
-  FileText,
-  FolderLock,
-  Calendar,
-  ExternalLink,
-  Copy,
-  Check,
-  Trash2,
-  Sparkles,
-  Paperclip,
-  Plus,
-  ArchiveRestore,
-  XCircle,
-  Clock,
-  Award,
-  RotateCcw,
-  FileCheck2,
-  UploadCloud,
   ShieldAlert,
-  ArrowRightCircle,
-  X,
+  CheckCircle2,
+  XCircle,
   Eye,
+  EyeOff,
   Lock,
-  Unlock,
+  UploadCloud,
+  Video,
+  Trash2,
+  ExternalLink,
+  FolderLock,
+  FileText,
+  Calendar,
+  CalendarPlus,
+  AlertCircle,
+  UserCheck,
+  Mail,
+  Clock,
   History,
+  X,
 } from "lucide-react";
 
-const inputBaseClass =
-  "h-11 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 px-3.5 text-sm font-sans text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all";
+const inputClass =
+  "h-11 w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 px-3.5 text-sm font-sans text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none transition-all";
 
-const PROCESS_STAGES: {
-  id: ApplicationStatus;
-  order: number;
-  label: string;
-  desc: string;
-}[] = [
-  {
-    id: "onboarding_pending",
-    order: 1,
-    label: "1. Onboarding",
-    desc: "Cuestionario estratégico",
-  },
-  {
-    id: "documents_pending",
-    order: 2,
-    label: "2. Bóveda Documental",
-    desc: "Recolección de soportes",
-  },
-  {
-    id: "in_legal_review",
-    order: 3,
-    label: "3. Auditoría Legal",
-    desc: "Revisión por especialista",
-  },
-  {
-    id: "ready_for_consulate",
-    order: 4,
-    label: "4. Listo Consulado",
-    desc: "Entregables y simulacro",
-  },
-];
-
-function getStageOrder(status: ApplicationStatus): number {
-  if (status === "onboarding_pending") return 1;
-  if (status === "documents_pending") return 2;
-  if (status === "in_legal_review") return 3;
-  if (status === "ready_for_consulate") return 4;
-  if (status === "approved" || status === "rejected") return 5;
-  return 1;
+function maskSensitiveValue(raw?: string): string {
+  if (!raw || raw.trim().length === 0) return "Pendiente";
+  const clean = raw.trim();
+  if (clean.length <= 4) return "****";
+  return `${"•".repeat(Math.max(4, clean.length - 4))}${clean.slice(-4)}`;
 }
 
-interface StageTransitionPrompt {
-  targetStatus: ApplicationStatus;
-  targetLabel: string;
-  direction: "forward" | "backward";
-  blockingErrors: string[];
-  warnings: string[];
-}
-
-function CaseWorkspaceContent() {
+function AdminCaseWorkspaceContent() {
   const params = useParams();
   const router = useRouter();
+  const caseId = String(params?.id || "");
   const { profile } = useAuth();
-  const caseId = params?.id as string;
 
   const [appData, setAppData] = useState<VisaApplication | null>(null);
   const [staffList, setStaffList] = useState<UserProfile[]>([]);
-  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<
-    "cuestionario" | "boveda" | "entregables" | "meetings" | "auditoria"
-  >("cuestionario");
-  const [loading, setLoading] = useState(true);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [loadingCase, setLoadingCase] = useState(true);
 
-  // 1. Visor de Documentos Integrado
-  const [previewDoc, setPreviewDoc] = useState<{
-    title: string;
-    fileName?: string;
-    fileUrl: string;
+  // Estado de enmascaramiento y datos descargados bajo demanda desde la subcolección private_pii/vault
+  const [piiRevealed, setPiiRevealed] = useState(false);
+  const [unmaskedVaultPii, setUnmaskedVaultPii] = useState<{
+    nationalId?: string;
+    passportNumber?: string;
+    monthlyIncomeCop?: string;
+    mobilePhone?: string;
   } | null>(null);
 
-  // 5. Modal para escribir motivo exacto al Observar/Rechazar un documento
-  const [rejectingDocItem, setRejectingDocItem] =
-    useState<VaultDocument | null>(null);
-  const [rejectReasonText, setRejectReasonText] = useState("");
+  const [previewVaultDoc, setPreviewVaultDoc] =
+    useState<VaultDocumentItem | null>(null);
 
-  const [transitionPrompt, setTransitionPrompt] =
-    useState<StageTransitionPrompt | null>(null);
-  const [showResolutionModal, setShowResolutionModal] = useState(false);
+  const [docFeedbackMap, setDocFeedbackMap] = useState<Record<string, string>>(
+    {}
+  );
 
-  const [delivTitle, setDelivTitle] = useState("");
-  const [delivCategory, setDelivCategory] = useState<
-    OfficialDeliverableItem["category"]
-  >("Confirmación DS-160");
+  const [delivLabel, setDelivLabel] = useState("");
   const [delivFile, setDelivFile] = useState<File | null>(null);
   const [uploadingDeliv, setUploadingDeliv] = useState(false);
 
-  const [meetingDate, setMeetingDate] = useState(
-    new Date().toISOString().split("T")[0]
-  );
-  const [meetingTitle, setMeetingTitle] = useState("");
-  const [meetingNotes, setMeetingNotes] = useState("");
-  const [meetingFile, setMeetingFile] = useState<File | null>(null);
-  const [savingMeeting, setSavingMeeting] = useState(false);
+  const [meetTitle, setMeetTitle] = useState("");
+  const [meetDateTime, setMeetDateTime] = useState("");
+  const [meetUrl, setMeetUrl] = useState("");
+  const [meetNotes, setMeetNotes] = useState("");
+  const [savingMeet, setSavingMeet] = useState(false);
 
-  const [decommissioning, setDecommissioning] = useState(false);
+  const [purgingVault, setPurgingVault] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
   const isStaff = profile?.role === "admin" || profile?.role === "advisor";
 
-  useEffect(() => {
-    setFeedback("");
-    setErrorMsg("");
-  }, [activeWorkspaceTab]);
-
-  useEffect(() => {
-    if (!feedback && !errorMsg) return;
-    const timer = setTimeout(() => {
-      setFeedback("");
-      setErrorMsg("");
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, [feedback, errorMsg]);
-
-  useEffect(() => {
-    if (!isStaff || !caseId) return;
-
-    const unsubCase = onSnapshot(
-      doc(db, "applications", caseId),
-      (snap) => {
-        if (snap.exists()) {
-          setAppData(snap.data() as VisaApplication);
-        } else {
-          setAppData(null);
-        }
-        setLoading(false);
-      },
-      () => {
-        setErrorMsg("No se pudo sincronizar el expediente en tiempo real.");
-        setLoading(false);
+  const fetchCaseDetails = async () => {
+    if (!caseId) return;
+    setLoadingCase(true);
+    try {
+      const snap = await getDoc(doc(db, "applications", caseId));
+      if (snap.exists()) {
+        setAppData(snap.data() as VisaApplication);
       }
-    );
 
-    getDocs(collection(db, "users")).then((usersSnap) => {
-      const staff: UserProfile[] = [];
+      const usersSnap = await getDocs(collection(db, "users"));
+      const advisors: UserProfile[] = [];
       usersSnap.forEach((d) => {
         const u = d.data() as UserProfile;
         if (u.role === "admin" || u.role === "advisor") {
-          staff.push(u);
+          advisors.push(u);
         }
       });
-      setStaffList(staff);
-    });
+      setStaffList(advisors);
+    } catch {
+      setErrorMsg("No se pudo cargar el expediente del cliente.");
+    } finally {
+      setLoadingCase(false);
+    }
+  };
 
-    return () => unsubCase();
+  useEffect(() => {
+    if (isStaff && caseId) {
+      fetchCaseDetails();
+    }
   }, [isStaff, caseId]);
 
-  const handleCopyText = (label: string, val?: string) => {
-    if (!val) return;
-    navigator.clipboard.writeText(val);
-    setCopiedField(label);
-    setTimeout(() => setCopiedField(null), 1800);
-  };
+  useEffect(() => {
+    if (!previewVaultDoc) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPreviewVaultDoc(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewVaultDoc]);
 
-  // 4. Alternar Bloqueo / Desbloqueo del Cuestionario del Cliente
-  const handleToggleFormLock = async () => {
-    if (!appData) return;
-    const nextUnlocked = !appData.formUnlockedByAdvisor;
-    try {
-      const audit = buildAuditLogEntry(
-        nextUnlocked
-          ? "Cuestionario Desbloqueado Temporalmente"
-          : "Cuestionario Protegido (Modo Lectura)",
-        `El especialista ${
-          nextUnlocked ? "habilitó" : "bloqueó"
-        } la edición del Cuestionario Estratégico para el cliente.`,
-        profile?.fullName || "Asesor",
-        profile?.role || "advisor"
-      );
+  const handleToggleRevealPii = async () => {
+    if (!appData || !profile) return;
+    const nextState = !piiRevealed;
 
-      await updateDoc(doc(db, "applications", appData.id), {
-        formUnlockedByAdvisor: nextUnlocked,
-        auditLogs: [audit, ...(appData.auditLogs || [])],
-        updatedAt: new Date().toISOString(),
-      });
-
-      setFeedback(
-        nextUnlocked
-          ? "Edición de Cuestionario habilitada para el cliente."
-          : "Cuestionario bloqueado nuevamente en modo seguro."
-      );
-    } catch {
-      setErrorMsg("No se pudo cambiar el candado del cuestionario.");
-    }
-  };
-
-  const evaluateStageTransition = (targetStatus: ApplicationStatus) => {
-    if (!appData || appData.status === targetStatus) return;
-
-    const currentMetrics = calculateApplicationMetrics(appData);
-    const currentOrder = getStageOrder(appData.status);
-    const targetOrder = getStageOrder(targetStatus);
-    const direction: "forward" | "backward" =
-      targetOrder < currentOrder ? "backward" : "forward";
-
-    const stageObj = PROCESS_STAGES.find((s) => s.id === targetStatus);
-    const targetLabel =
-      stageObj?.label ||
-      (targetStatus === "approved"
-        ? "Visa Aprobada"
-        : targetStatus === "rejected"
-        ? "Visa Rechazada"
-        : targetStatus);
-
-    const blockingErrors: string[] = [];
-    const warnings: string[] = [];
-
-    const fd = appData.formData;
-    const isFormComplete = Boolean(
-      fd &&
-        fd.fullName &&
-        fd.nationalId &&
-        fd.mobilePhone &&
-        fd.homeAddress &&
-        fd.currentOccupation &&
-        fd.estimatedArrivalDate
-    );
-
-    const docsMap = appData.documents || {};
-    const docsList = Object.values(docsMap);
-    const hasPassport = Boolean(docsMap["passport"]);
-    const hasPhoto = Boolean(docsMap["photo_us"] || docsMap["photo_jp"]);
-    const unverifiedDocsCount = docsList.filter(
-      (d) => d.status !== "verified"
-    ).length;
-    const deliverablesCount = appData.officialDeliverables?.length || 0;
-    const meetingsCount = appData.meetings?.length || 0;
-
-    if (direction === "forward") {
-      if (targetOrder >= 2 && !isFormComplete) {
-        blockingErrors.push(
-          "Obligatorio: El cliente aún no ha completado los campos requeridos del Cuestionario Estratégico (Nombre, Cédula, Teléfono, Dirección, Ocupación y Fecha de viaje)."
+    if (nextState && !unmaskedVaultPii) {
+      try {
+        const vaultSnap = await getDoc(
+          doc(db, "applications", appData.id, "private_pii", "vault")
         );
-      }
-
-      if (targetOrder >= 3) {
-        if (!hasPassport) {
-          blockingErrors.push(
-            "Obligatorio: El cliente no ha subido su Pasaporte Vigente en la Bóveda de Documentos."
-          );
+        if (vaultSnap.exists()) {
+          setUnmaskedVaultPii(vaultSnap.data());
         }
-        if (!hasPhoto) {
-          warnings.push(
-            "El cliente aún no ha cargado la Fotografía Digital tipo visado en su Bóveda."
-          );
-        }
-        if (docsList.length < 3) {
-          warnings.push(
-            `Solo se han subido ${docsList.length} documentos en la Bóveda (se recomiendan mínimo 3 soportes).`
-          );
-        }
-      }
-
-      if (targetOrder >= 4) {
-        if (unverifiedDocsCount > 0) {
-          warnings.push(
-            `Hay ${unverifiedDocsCount} documento(s) en la Bóveda que aún no han sido marcados como "Verificados" por el asesor.`
-          );
-        }
-        if (deliverablesCount === 0) {
-          warnings.push(
-            "Aún no has subido ningún Entregable Oficial (ej. Confirmación DS-160 o Formato Japonés) al perfil del cliente."
-          );
-        }
-        if (meetingsCount === 0) {
-          warnings.push(
-            "No se ha registrado ninguna sesión en la Bitácora de Meetings."
-          );
-        }
-      }
-    } else {
-      warnings.push(
-        `El expediente ya se encontraba en una fase más avanzada (Paso ${currentMetrics.currentStep} de 4). Al retroceder a "${targetLabel}", el porcentaje del cliente se ajustará hacia atrás.`
-      );
-      if (isFormComplete && targetStatus === "onboarding_pending") {
-        warnings.push(
-          "El cliente ya había completado su Cuestionario Estratégico."
-        );
-      }
+      } catch {}
     }
 
-    setShowResolutionModal(false);
-    setTransitionPrompt({
-      targetStatus,
-      targetLabel,
-      direction,
-      blockingErrors,
-      warnings,
-    });
-  };
+    setPiiRevealed(nextState);
 
-  const executeStageChange = async (newStatus: ApplicationStatus) => {
-    if (!appData) return;
-    setFeedback("");
-    setErrorMsg("");
-    setTransitionPrompt(null);
-    setShowResolutionModal(false);
-
-    const simulatedApp: VisaApplication = { ...appData, status: newStatus };
-    const metrics = calculateApplicationMetrics(simulatedApp);
-
-    const audit = buildAuditLogEntry(
-      `Cambio de Etapa: ${newStatus.toUpperCase()}`,
-      `El estado del expediente pasó de "${appData.status}" a "${newStatus}" (${metrics.progressPercentage}%).`,
-      profile?.fullName || "Especialista Legal",
-      profile?.role || "advisor"
-    );
-
-    try {
-      await updateDoc(doc(db, "applications", appData.id), {
-        status: newStatus,
-        progressPercentage: metrics.progressPercentage,
-        currentStep: metrics.currentStep,
-        auditLogs: [audit, ...(appData.auditLogs || [])],
-        updatedAt: new Date().toISOString(),
+    if (nextState) {
+      const clientName = formatDisplayName(
+        appData.formData?.fullName || appData.clientName || "Cliente"
+      );
+      await recordSystemLog({
+        category: "PII_VAULT",
+        eventType: "Acceso a Bóveda Subcolección PII (private_pii/vault)",
+        outcome: "INFO",
+        actorEmail: profile.email,
+        actorName: profile.fullName,
+        actorRole: profile.role,
+        targetResource: `${clientName} (${appData.destination})`,
+        details: `${formatDisplayName(
+          profile.fullName
+        )} descargó y reveló bajo demanda los campos sensibles de la subcolección aislada private_pii.`,
       });
-
-      await sendInternalNotification(
-        appData.id,
-        "Actualización en el estado de tu trámite",
-        `Tu expediente ha avanzado a la etapa: ${newStatus.toUpperCase()} (${metrics.progressPercentage}%).`,
-        "/dashboard"
-      );
-
-      setFeedback(
-        `Etapa actualizada a "${newStatus.toUpperCase()}". Sincronizado en tiempo real con el portal del cliente (${metrics.progressPercentage}%).`
-      );
-    } catch {
-      setErrorMsg("No se pudo actualizar la etapa del caso.");
     }
   };
 
-  const handleChangeAdvisor = async (newAdvisorUid: string) => {
-    if (!appData) return;
-    const chosen = staffList.find((s) => s.uid === newAdvisorUid);
-    const cleanName = chosen ? formatDisplayName(chosen.fullName) : "";
+  const handleAssignAdvisor = async (advisorUid: string) => {
+    if (!appData || !profile) return;
+    const selectedAdvisor = staffList.find((s) => s.uid === advisorUid);
+    if (!selectedAdvisor) return;
+
     try {
+      const cleanAdvName = formatDisplayName(selectedAdvisor.fullName);
+      const advisorPhoto =
+        selectedAdvisor.photoUrl || selectedAdvisor.photoURL || "";
       const audit = buildAuditLogEntry(
         "Asignación de Especialista Legal",
-        chosen
-          ? `Expediente asignado a ${cleanName}.`
-          : "Expediente devuelto a la Bolsa de Casos.",
-        profile?.fullName || "Admin",
-        profile?.role || "admin"
+        `Caso asignado a ${cleanAdvName}.`,
+        profile.fullName,
+        profile.role
       );
 
       await updateDoc(doc(db, "applications", appData.id), {
-        assignedAdvisorId: chosen ? chosen.uid : "",
-        assignedAdvisorName: cleanName,
-        assignedAdvisorEmail: chosen ? chosen.email : "",
-        assignedAdvisorBookingUrl: chosen?.bookingUrl || "",
+        assignedAdvisorId: selectedAdvisor.uid,
+        assignedAdvisorName: cleanAdvName,
+        assignedAdvisorEmail: selectedAdvisor.email,
+        assignedAdvisorPhotoUrl: advisorPhoto,
+        assignedAdvisorBookingUrl: selectedAdvisor.bookingUrl || "",
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
 
-      if (chosen) {
-        await sendInternalNotification(
-          appData.id,
-          `Especialista Asignado: ${cleanName}`,
-          `${cleanName} ha tomado tu expediente. Ya puedes agendar tu sesión 1-a-1 en la Sala Consular.`,
-          "/dashboard/sala-entrenamiento"
-        );
-      }
+      await recordSystemLog({
+        category: "CASE_TRACEABILITY",
+        eventType: "Asignación de Especialista Legal",
+        outcome: "SUCCESS",
+        actorEmail: profile.email,
+        actorName: profile.fullName,
+        actorRole: profile.role,
+        targetResource: `${formatDisplayName(appData.clientName)} (${
+          appData.destination
+        })`,
+        details: `Titularidad asignada a ${cleanAdvName}.`,
+      });
 
-      setFeedback(
-        chosen
-          ? `Caso asignado a ${cleanName}.`
-          : "El caso fue devuelto a la Bolsa de Casos."
-      );
+      setFeedback(`Especialista ${cleanAdvName} asignado correctamente.`);
+      await fetchCaseDetails();
     } catch {
-      setErrorMsg("Error al reasignar asesor.");
+      setErrorMsg("No se pudo asignar el especialista.");
     }
   };
 
-  const handleVerifyDocument = async (
-    docId: string,
-    newDocStatus: "verified" | "rejected",
-    feedbackReason: string = ""
+  const handleUpdateFinalConsularStatus = async (
+    nextStatus: ApplicationStatus
   ) => {
-    if (!appData || !appData.documents?.[docId]) return;
+    if (!appData || !profile) return;
     try {
-      const targetDoc = appData.documents[docId];
-      const updatedDocs: Record<string, VaultDocument> = {
-        ...appData.documents,
-        [docId]: {
-          ...targetDoc,
-          status: newDocStatus,
-          advisorFeedback:
-            newDocStatus === "rejected" ? feedbackReason.trim() : "",
-        },
-      };
-
-      const audit = buildAuditLogEntry(
-        newDocStatus === "verified"
-          ? `Documento Verificado: ${targetDoc.title}`
-          : `Documento Observado: ${targetDoc.title}`,
-        newDocStatus === "verified"
-          ? `Archivo "${targetDoc.fileName}" aprobado en auditoría.`
-          : `Archivo "${targetDoc.fileName}" observado. Motivo: ${feedbackReason}`,
-        profile?.fullName || "Especialista Legal",
-        profile?.role || "advisor"
+      const cleanActor = formatDisplayName(profile.fullName);
+      const clientName = formatDisplayName(
+        appData.formData?.fullName || appData.clientName || "Cliente"
       );
 
-      const nextApp = { ...appData, documents: updatedDocs };
-      const metrics = calculateApplicationMetrics(nextApp);
+      const audit = buildAuditLogEntry(
+        `Cambio de Estatus Consular: ${nextStatus.toUpperCase()}`,
+        `El especialista actualizó el estado del trámite a ${nextStatus}.`,
+        cleanActor,
+        profile.role
+      );
+
+      await updateDoc(doc(db, "applications", appData.id), {
+        status: nextStatus,
+        progressPercentage:
+          nextStatus === "approved" || nextStatus === "rejected"
+            ? 100
+            : appData.progressPercentage,
+        auditLogs: [audit, ...(appData.auditLogs || [])],
+        updatedAt: new Date().toISOString(),
+      });
+
+      await recordSystemLog({
+        category: "CASE_TRACEABILITY",
+        eventType: `Cambio de Estatus Consular (${nextStatus.toUpperCase()})`,
+        outcome: nextStatus === "rejected" ? "WARNING" : "SUCCESS",
+        actorEmail: profile.email,
+        actorName: cleanActor,
+        actorRole: profile.role,
+        targetResource: `${clientName} (${appData.destination})`,
+        details: `Estado del expediente actualizado a [${nextStatus.toUpperCase()}].`,
+      });
+
+      if (appData.clientEmail) {
+        await sendTransactionalEmail({
+          to: appData.clientEmail,
+          subject: `Actualización de tu Expediente Consular (${nextStatus.toUpperCase()})`,
+          clientName,
+          title: `Nuevo Estado: ${nextStatus.toUpperCase()}`,
+          message: `Tu especialista legal (${cleanActor}) ha actualizado el estado de tu solicitud de visa a "${nextStatus.toUpperCase()}". Ingresa a tu portal para consultar los detalles.`,
+          actorEmail: profile.email,
+          actorName: cleanActor,
+          actorRole: profile.role,
+        });
+      }
+
+      setFeedback(
+        `Estatus actualizado a ${nextStatus.toUpperCase()} y notificado.`
+      );
+      await fetchCaseDetails();
+    } catch {
+      setErrorMsg("No se pudo cambiar el estatus del expediente.");
+    }
+  };
+
+  const handleReviewDocument = async (
+    docItem: VaultDocumentItem,
+    verdict: "verified" | "rejected"
+  ) => {
+    if (!appData || !profile) return;
+
+    const rawDocs = appData.documents;
+    const baseDocs: VaultDocumentItem[] =
+      Array.isArray(rawDocs) && rawDocs.length > 0
+        ? rawDocs
+        : getDefaultDocumentsByDestination(appData.destination);
+
+    const customFeedback = (docFeedbackMap[docItem.id] || "").trim();
+    if (verdict === "rejected" && !customFeedback) {
+      setErrorMsg(
+        "Por favor escribe una observación indicando al cliente qué debe ajustar en el documento."
+      );
+      return;
+    }
+
+    try {
+      const cleanActor = formatDisplayName(profile.fullName);
+      const clientName = formatDisplayName(
+        appData.formData?.fullName || appData.clientName || "Cliente"
+      );
+
+      const updatedDocs = baseDocs.map((d) =>
+        d.id === docItem.id
+          ? {
+              ...d,
+              status: verdict,
+              feedback:
+                verdict === "rejected"
+                  ? customFeedback
+                  : "Verificado conforme a norma consular.",
+              reviewedBy: cleanActor,
+            }
+          : d
+      );
+
+      const nextMetrics = calculateApplicationMetrics({
+        ...appData,
+        documents: updatedDocs,
+      });
+
+      const audit = buildAuditLogEntry(
+        `Dictamen Bóveda PII (${
+          verdict === "verified" ? "VERIFICADO" : "RECHAZADO"
+        }): ${docItem.title}`,
+        verdict === "rejected"
+          ? `Motivo de ajuste: ${customFeedback}`
+          : `Documento validado por ${cleanActor}.`,
+        cleanActor,
+        profile.role
+      );
 
       await updateDoc(doc(db, "applications", appData.id), {
         documents: updatedDocs,
-        progressPercentage: metrics.progressPercentage,
-        currentStep: metrics.currentStep,
+        progressPercentage: nextMetrics.progressPercentage,
+        currentStep: nextMetrics.currentStep,
+        status: nextMetrics.autoStatus,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
 
+      await recordSystemLog({
+        category: "PII_VAULT",
+        eventType: `Auditoría de Soporte PII (${
+          verdict === "verified" ? "Verificado" : "Rechazado"
+        })`,
+        outcome: verdict === "verified" ? "SUCCESS" : "WARNING",
+        actorEmail: profile.email,
+        actorName: cleanActor,
+        actorRole: profile.role,
+        targetResource: `${clientName} • ${docItem.title}`,
+        details:
+          verdict === "verified"
+            ? `Soporte "${docItem.title}" aprobado.`
+            : `Soporte "${docItem.title}" rechazado: ${customFeedback}`,
+      });
+
       await sendInternalNotification(
         appData.id,
-        newDocStatus === "verified"
-          ? `✓ Documento verificado: ${targetDoc.title}`
-          : `⚠️ Documento requiere ajuste: ${targetDoc.title}`,
-        newDocStatus === "verified"
-          ? `Tu especialista legal aprobó "${targetDoc.title}".`
-          : `Motivo de observación: "${feedbackReason}". Ingresa a tu Bóveda para reemplazarlo.`,
+        verdict === "verified"
+          ? `Documento Verificado: ${docItem.title}`
+          : `Ajuste Requerido: ${docItem.title}`,
+        verdict === "verified"
+          ? `Tu especialista legal aprobó "${docItem.title}" en la Bóveda.`
+          : `Observación en "${docItem.title}": ${customFeedback}`,
         "/dashboard/boveda"
       );
 
-      setRejectingDocItem(null);
-      setRejectReasonText("");
-      setFeedback(
-        `Documento marcado como ${
-          newDocStatus === "verified" ? "VERIFICADO" : "OBSERVADO"
-        } y notificado al cliente.`
-      );
+      if (appData.clientEmail) {
+        await sendTransactionalEmail({
+          to: appData.clientEmail,
+          subject:
+            verdict === "verified"
+              ? `✓ Soporte Verificado: ${docItem.title}`
+              : `⚠️ Ajuste Requerido en Bóveda: ${docItem.title}`,
+          clientName,
+          title:
+            verdict === "verified"
+              ? `Documento Aprobado: ${docItem.title}`
+              : `Observación Legal en: ${docItem.title}`,
+          message:
+            verdict === "verified"
+              ? `Tu especialista legal (${cleanActor}) ha auditado y verificado satisfactoriamente tu documento "${docItem.title}".`
+              : `Tu especialista legal revisó "${docItem.title}" e indicó el siguiente ajuste necesario: "${customFeedback}". Por favor sube la versión corregida en tu Bóveda Documental.`,
+          ctaLabel: "Ir a mi Bóveda Criptográfica",
+          ctaUrl: "/dashboard/boveda",
+          actorEmail: profile.email,
+          actorName: cleanActor,
+          actorRole: profile.role,
+        });
+      }
+
+      setFeedback(`Dictamen guardado y notificado al cliente.`);
+      await fetchCaseDetails();
     } catch {
-      setErrorMsg("No se pudo actualizar el estado del documento.");
+      setErrorMsg("No se pudo guardar el dictamen del documento.");
     }
   };
 
-  const handleUploadOfficialDeliverable = async (e: React.FormEvent) => {
+  const handleDeleteSingleDocument = async (docItem: VaultDocumentItem) => {
+    if (!appData || !profile) return;
+
+    try {
+      if (docItem.storagePath) {
+        try {
+          await deleteObject(ref(storage, docItem.storagePath));
+        } catch {}
+      }
+
+      const rawDocs =
+        Array.isArray(appData.documents) && appData.documents.length > 0
+          ? appData.documents
+          : getDefaultDocumentsByDestination(appData.destination);
+
+      const updatedDocs: VaultDocumentItem[] = rawDocs.map((d) =>
+        d.id === docItem.id
+          ? {
+              ...d,
+              status: "pending",
+              fileName: "",
+              fileUrl: "",
+              storagePath: "",
+              feedback: "",
+            }
+          : d
+      );
+
+      const nextMetrics = calculateApplicationMetrics({
+        ...appData,
+        documents: updatedDocs,
+      });
+
+      const cleanActor = formatDisplayName(profile.fullName);
+      const clientName = formatDisplayName(
+        appData.formData?.fullName || appData.clientName || "Cliente"
+      );
+
+      const audit = buildAuditLogEntry(
+        `Eliminación Individual de Soporte: ${docItem.title}`,
+        `Archivo eliminado de Storage y requisito restablecido a pendiente por ${cleanActor}.`,
+        cleanActor,
+        profile.role
+      );
+
+      await updateDoc(doc(db, "applications", appData.id), {
+        documents: updatedDocs,
+        progressPercentage: nextMetrics.progressPercentage,
+        currentStep: nextMetrics.currentStep,
+        status: nextMetrics.autoStatus,
+        auditLogs: [audit, ...(appData.auditLogs || [])],
+        updatedAt: new Date().toISOString(),
+      });
+
+      await recordSystemLog({
+        category: "PII_VAULT",
+        eventType: `Eliminación Individual de Archivo (${docItem.title})`,
+        outcome: "WARNING",
+        actorEmail: profile.email,
+        actorName: cleanActor,
+        actorRole: profile.role,
+        targetResource: `${clientName} • ${docItem.title}`,
+        details: `El asesor eliminó el archivo "${
+          docItem.fileName || docItem.title
+        }" y restableció el requisito a pendiente.`,
+      });
+
+      setFeedback(`Archivo de "${docItem.title}" eliminado correctamente.`);
+      await fetchCaseDetails();
+    } catch {
+      setErrorMsg("No se pudo eliminar el archivo seleccionado.");
+    }
+  };
+
+  const handleUploadDeliverable = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!appData || !delivFile) return;
+    if (!appData || !profile || !delivFile || !delivLabel.trim()) return;
+
     setUploadingDeliv(true);
     setFeedback("");
     setErrorMsg("");
 
     try {
       const safeName = delivFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const storagePath = `vault/${appData.id}/deliverables/${Date.now()}_${safeName}`;
+      const storagePath = `vault/${appData.id}/deliverable_${Date.now()}_${safeName}`;
       const fileRef = ref(storage, storagePath);
 
       await uploadBytes(fileRef, delivFile);
       const fileUrl = await getDownloadURL(fileRef);
 
+      const cleanActor = formatDisplayName(profile.fullName);
+      const clientName = formatDisplayName(
+        appData.formData?.fullName || appData.clientName || "Cliente"
+      );
+
       const newDeliv: OfficialDeliverableItem = {
         id: `deliv_${Date.now()}`,
-        title: delivTitle.trim() || delivCategory,
-        category: delivCategory,
+        label: delivLabel.trim(),
         fileName: delivFile.name,
         fileUrl,
         storagePath,
-        fileSize: delivFile.size,
-        uploadedBy: formatDisplayName(profile?.fullName) || "Equipo Legal",
+        uploadedBy: cleanActor,
         uploadedAt: new Date().toISOString(),
       };
 
-      const updatedList = [newDeliv, ...(appData.officialDeliverables || [])];
+      const updatedDeliverables = [
+        newDeliv,
+        ...(Array.isArray(appData.officialDeliverables)
+          ? appData.officialDeliverables
+          : []),
+      ];
+
+      const nextMetrics = calculateApplicationMetrics({
+        ...appData,
+        officialDeliverables: updatedDeliverables,
+      });
 
       const audit = buildAuditLogEntry(
-        `Entregable Oficial Emitido: ${newDeliv.category}`,
-        `Se publicó "${newDeliv.title}" (${delivFile.name}) en el perfil del cliente.`,
-        profile?.fullName || "Especialista Legal",
-        profile?.role || "advisor"
+        `Emisión de Entregable Oficial: ${newDeliv.label}`,
+        `Archivo oficial emitido: ${newDeliv.fileName}.`,
+        cleanActor,
+        profile.role
       );
 
       await updateDoc(doc(db, "applications", appData.id), {
-        officialDeliverables: updatedList,
-        consularSession: {
-          ...(appData.consularSession || {}),
-          officialDeliverableTitle: newDeliv.title,
-          officialDeliverableUrl: newDeliv.fileUrl,
-        },
+        officialDeliverables: updatedDeliverables,
+        progressPercentage: nextMetrics.progressPercentage,
+        currentStep: nextMetrics.currentStep,
+        status: nextMetrics.autoStatus,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
 
+      await recordSystemLog({
+        category: "PII_VAULT",
+        eventType: `Emisión de Entregable Oficial (${newDeliv.label})`,
+        outcome: "SUCCESS",
+        actorEmail: profile.email,
+        actorName: cleanActor,
+        actorRole: profile.role,
+        targetResource: `${clientName} (${appData.destination})`,
+        details: `Entregable "${newDeliv.label}" puesto a disposición del cliente.`,
+      });
+
       await sendInternalNotification(
         appData.id,
-        `📄 Nuevo Documento Oficial: ${newDeliv.title}`,
-        `Tu especialista ha subido "${newDeliv.title}" a tu perfil listo para consultar o descargar.`,
+        `Nuevo Entregable Oficial: ${newDeliv.label}`,
+        `Tu especialista ha emitido "${newDeliv.label}". Ya puedes descargarlo desde tu Perfil.`,
         "/dashboard/perfil"
       );
 
-      setDelivTitle("");
+      if (appData.clientEmail) {
+        await sendTransactionalEmail({
+          to: appData.clientEmail,
+          subject: `📄 Documento Oficial Emitido: ${newDeliv.label}`,
+          clientName,
+          title: `Entregable Listo: ${newDeliv.label}`,
+          message: `Tu especialista legal (${cleanActor}) ha emitido tu documento oficial "${newDeliv.label}" (${newDeliv.fileName}). Ya se encuentra disponible para descarga en tu portal privado.`,
+          ctaLabel: "Descargar mi Entregable Oficial",
+          ctaUrl: "/dashboard/perfil",
+          actorEmail: profile.email,
+          actorName: cleanActor,
+          actorRole: profile.role,
+        });
+      }
+
+      setDelivLabel("");
       setDelivFile(null);
-      setFeedback(
-        `¡Documento "${newDeliv.title}" subido y notificado al cliente!`
-      );
+      setFeedback(`¡Entregable "${newDeliv.label}" emitido y notificado!`);
+      await fetchCaseDetails();
     } catch {
-      setErrorMsg("No se pudo subir el documento oficial a Firebase Storage.");
+      setErrorMsg("No se pudo subir el entregable oficial.");
     } finally {
       setUploadingDeliv(false);
     }
   };
 
-  const handleDeleteOfficialDeliverable = async (
-    item: OfficialDeliverableItem
-  ) => {
-    if (!appData) return;
-    try {
-      if (item.storagePath) {
-        try {
-          await deleteObject(ref(storage, item.storagePath));
-        } catch {}
-      }
-      const updatedList = (appData.officialDeliverables || []).filter(
-        (d) => d.id !== item.id
-      );
-      await updateDoc(doc(db, "applications", appData.id), {
-        officialDeliverables: updatedList,
-        updatedAt: new Date().toISOString(),
-      });
-      setFeedback("Documento oficial eliminado del perfil del cliente.");
-    } catch {
-      setErrorMsg("No se pudo eliminar el entregable.");
-    }
-  };
-
-  const handleAddMeeting = async (e: React.FormEvent) => {
+  const handleScheduleMeeting = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!appData) return;
-    setSavingMeeting(true);
+    if (!appData || !profile || !meetTitle.trim() || !meetDateTime) return;
+
+    setSavingMeet(true);
     setFeedback("");
     setErrorMsg("");
 
     try {
-      let attachmentUrl = "";
-      let attachmentName = "";
-      let attachmentStoragePath = "";
+      const cleanActor = formatDisplayName(profile.fullName);
+      const clientName = formatDisplayName(
+        appData.formData?.fullName || appData.clientName || "Cliente"
+      );
 
-      if (meetingFile) {
-        const safeName = meetingFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        attachmentStoragePath = `vault/${appData.id}/meetings/${Date.now()}_${safeName}`;
-        const fileRef = ref(storage, attachmentStoragePath);
-        await uploadBytes(fileRef, meetingFile);
-        attachmentUrl = await getDownloadURL(fileRef);
-        attachmentName = meetingFile.name;
-      }
-
-      const newMeeting: CaseMeetingRecord = {
-        id: `mtg_${Date.now()}`,
-        date: meetingDate,
-        title: meetingTitle.trim() || "Sesión de Revisión y Auditoría Consular",
-        notes: meetingNotes.trim(),
-        advisorName:
-          formatDisplayName(profile?.fullName) || "Especialista Legal",
-        ...(attachmentUrl
-          ? { attachmentUrl, attachmentName, attachmentStoragePath }
-          : {}),
+      const newMeet: ScheduledMeetingItem = {
+        id: `meet_${Date.now()}`,
+        title: meetTitle.trim(),
+        dateTime: meetDateTime,
+        meetUrl: meetUrl.trim() || "https://meet.google.com/",
+        advisorName: cleanActor,
+        notes: meetNotes.trim(),
+        completed: false,
         createdAt: new Date().toISOString(),
       };
 
-      const updatedMeetings = [newMeeting, ...(appData.meetings || [])];
-      const nextApp: VisaApplication = {
-        ...appData,
-        meetings: updatedMeetings,
-      };
-      const metrics = calculateApplicationMetrics(nextApp);
+      const updatedMeetings = [
+        newMeet,
+        ...(Array.isArray(appData.meetings) ? appData.meetings : []),
+      ];
 
       const audit = buildAuditLogEntry(
-        `Meeting Registrado: ${newMeeting.title}`,
-        `Sesión del ${newMeeting.date} registrada en bitácora.`,
-        profile?.fullName || "Especialista Legal",
-        profile?.role || "advisor"
+        `Sesión 1-a-1 Programada: ${newMeet.title}`,
+        `Fecha: ${new Date(newMeet.dateTime).toLocaleString("es-CO")}.`,
+        cleanActor,
+        profile.role
       );
 
       await updateDoc(doc(db, "applications", appData.id), {
         meetings: updatedMeetings,
-        progressPercentage: metrics.progressPercentage,
-        currentStep: metrics.currentStep,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
+      });
+
+      await recordSystemLog({
+        category: "CASE_TRACEABILITY",
+        eventType: "Programación de Simulacro 1-a-1 (Google Meet)",
+        outcome: "SUCCESS",
+        actorEmail: profile.email,
+        actorName: cleanActor,
+        actorRole: profile.role,
+        targetResource: `${clientName} (${appData.destination})`,
+        details: `Sesión "${newMeet.title}" agendada para ${new Date(
+          newMeet.dateTime
+        ).toLocaleString("es-CO")}.`,
       });
 
       await sendInternalNotification(
         appData.id,
-        `📅 Resumen de Sesión: ${newMeeting.title}`,
-        `Tu asesor ha registrado las notas y acuerdos de tu sesión en la Sala Consular.`,
+        `Sesión Agendada: ${newMeet.title}`,
+        `Tienes una sesión 1-a-1 el ${new Date(
+          newMeet.dateTime
+        ).toLocaleString("es-CO")}. Puedes descargar el archivo .ics en tu Sala Consular.`,
         "/dashboard/sala-entrenamiento"
       );
 
-      setMeetingTitle("");
-      setMeetingNotes("");
-      setMeetingFile(null);
-      setFeedback("¡Meeting registrado y notificado al cliente!");
+      if (appData.clientEmail) {
+        const gcalUrl = getGoogleCalendarUrl(newMeet, clientName);
+        await sendTransactionalEmail({
+          to: appData.clientEmail,
+          subject: `📅 Confirmación de Sesión Consular 1-a-1: ${newMeet.title}`,
+          clientName,
+          title: `Sesión Programada: ${newMeet.title}`,
+          message: `Tu especialista (${cleanActor}) ha agendado tu sesión para el ${new Date(
+            newMeet.dateTime
+          ).toLocaleString("es-CO", {
+            dateStyle: "full",
+            timeStyle: "short",
+          })}. Videollamada Google Meet: ${
+            newMeet.meetUrl
+          }. También puedes descargar el archivo .ics para Apple Calendar / Outlook desde tu Sala Consular.`,
+          ctaLabel: "📅 Añadir a mi Google Calendar",
+          ctaUrl: gcalUrl,
+          actorEmail: profile.email,
+          actorName: cleanActor,
+          actorRole: profile.role,
+        });
+      }
+
+      setMeetTitle("");
+      setMeetDateTime("");
+      setMeetUrl("");
+      setMeetNotes("");
+      setFeedback("Sesión Google Meet programada y notificada.");
+      await fetchCaseDetails();
     } catch {
-      setErrorMsg("No se pudo registrar el meeting.");
+      setErrorMsg("No se pudo programar la sesión.");
     } finally {
-      setSavingMeeting(false);
+      setSavingMeet(false);
     }
+  };
+
+  const handleToggleMeetingCompleted = async (meetingId: string) => {
+    if (!appData || !profile) return;
+    const currentMeetings = Array.isArray(appData.meetings)
+      ? appData.meetings
+      : [];
+    const updatedMeetings = currentMeetings.map((m) =>
+      m.id === meetingId ? { ...m, completed: !m.completed } : m
+    );
+    const nextMetrics = calculateApplicationMetrics({
+      ...appData,
+      meetings: updatedMeetings,
+    });
+
+    await updateDoc(doc(db, "applications", appData.id), {
+      meetings: updatedMeetings,
+      progressPercentage: nextMetrics.progressPercentage,
+      currentStep: nextMetrics.currentStep,
+      updatedAt: new Date().toISOString(),
+    });
+    await fetchCaseDetails();
   };
 
   const handleDeleteMeeting = async (meetingId: string) => {
-    if (!appData || !appData.meetings) return;
-    const target = appData.meetings.find((m) => m.id === meetingId);
-    try {
-      if (target?.attachmentStoragePath) {
-        try {
-          await deleteObject(ref(storage, target.attachmentStoragePath));
-        } catch {}
-      }
-      const updated = appData.meetings.filter((m) => m.id !== meetingId);
-      await updateDoc(doc(db, "applications", appData.id), {
-        meetings: updated,
-        updatedAt: new Date().toISOString(),
-      });
-      setFeedback("Registro de meeting eliminado.");
-    } catch {
-      setErrorMsg("No se pudo eliminar el registro.");
-    }
+    if (!appData || !profile) return;
+    const currentMeetings = Array.isArray(appData.meetings)
+      ? appData.meetings
+      : [];
+    const updatedMeetings = currentMeetings.filter((m) => m.id !== meetingId);
+
+    await updateDoc(doc(db, "applications", appData.id), {
+      meetings: updatedMeetings,
+      updatedAt: new Date().toISOString(),
+    });
+    setFeedback("Sesión eliminada del calendario del expediente.");
+    await fetchCaseDetails();
   };
 
-  const handleDecommissionCase = async () => {
-    if (!appData) return;
-    const confirmPurge = window.confirm(
-      `¿Confirmas el decomisionamiento seguro del expediente de ${
-        appData.formData?.fullName || appData.clientName
-      }?\n\nSe borrarán todos los archivos pesados de Firebase Storage y los datos sensibles PII, conservando la estadística en los KPIs.`
+  const handleZeroTrustPurgeVault = async () => {
+    if (!appData || !profile) return;
+    const confirmed = window.confirm(
+      "¿Ejecutar Purga Criptográfica Zero-Trust Final? Se eliminarán definitivamente todos los archivos sensibles de este expediente ya concluido."
     );
-    if (!confirmPurge) return;
+    if (!confirmed) return;
 
-    setDecommissioning(true);
+    setPurgingVault(true);
     try {
-      if (appData.documents) {
-        for (const docItem of Object.values(appData.documents)) {
-          if (docItem.storagePath) {
-            try {
-              await deleteObject(ref(storage, docItem.storagePath));
-            } catch {}
-          }
-        }
-      }
-      if (appData.officialDeliverables) {
-        for (const deliv of appData.officialDeliverables) {
-          if (deliv.storagePath) {
-            try {
-              await deleteObject(ref(storage, deliv.storagePath));
-            } catch {}
-          }
-        }
-      }
-      if (appData.meetings) {
-        for (const m of appData.meetings) {
-          if (m.attachmentStoragePath) {
-            try {
-              await deleteObject(ref(storage, m.attachmentStoragePath));
-            } catch {}
-          }
+      const rawDocs = Array.isArray(appData.documents)
+        ? appData.documents
+        : [];
+      for (const d of rawDocs) {
+        if (d.storagePath) {
+          try {
+            await deleteObject(ref(storage, d.storagePath));
+          } catch {}
         }
       }
 
-      const preservedName =
-        appData.formData?.fullName || appData.clientName || "Cliente Archivado";
+      const purgedDocs: VaultDocumentItem[] = rawDocs.map((d) => ({
+        ...d,
+        fileUrl: "",
+        storagePath: "",
+        fileName: "PURGADO (ZERO-TRUST)",
+      }));
+
+      const cleanActor = formatDisplayName(profile.fullName);
+      const clientName = formatDisplayName(
+        appData.formData?.fullName || appData.clientName || "Cliente"
+      );
 
       const audit = buildAuditLogEntry(
-        "Decomisionamiento y Purga PII (FinOps)",
-        "Archivos de Storage y campos sensibles purgados tras conclusión del trámite.",
-        profile?.fullName || "Admin",
-        "admin"
+        "Ejecución de Purga Definitiva Zero-Trust",
+        `Todos los soportes sensibles fueron eliminados de Firebase Storage tras concluir el trámite.`,
+        cleanActor,
+        profile.role
       );
 
       await updateDoc(doc(db, "applications", appData.id), {
-        clientName: preservedName,
-        formData: deleteField(),
-        documents: deleteField(),
-        officialDeliverables: deleteField(),
-        isDecommissioned: true,
-        decommissionedAt: new Date().toISOString(),
+        documents: purgedDocs,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
       });
 
-      setFeedback("Purga PII y decomisionamiento de Storage completado.");
+      await recordSystemLog({
+        category: "PII_VAULT",
+        eventType: "Purga Criptográfica Definitiva (Zero-Trust)",
+        outcome: "CRITICAL",
+        actorEmail: profile.email,
+        actorName: cleanActor,
+        actorRole: profile.role,
+        targetResource: `${clientName} (${appData.destination})`,
+        details: `Se destruyeron permanentemente los archivos PII en Storage tras finalizar el proceso.`,
+      });
+
+      setFeedback(
+        "Purga Criptográfica Zero-Trust completada y registrada en el SIEM."
+      );
+      await fetchCaseDetails();
     } catch {
-      setErrorMsg("Error al ejecutar la purga PII.");
+      setErrorMsg("Error al ejecutar la purga documental.");
     } finally {
-      setDecommissioning(false);
+      setPurgingVault(false);
     }
   };
 
-  if (loading) {
+  if (!isStaff) {
     return (
-      <div className="py-20 text-center text-xs text-brand-charcoal/50">
-        Abriendo Mesa de Trabajo del Expediente...
-      </div>
-    );
-  }
-
-  if (!appData) {
-    return (
-      <div className="rounded-2xl bg-brand-white p-8 border border-brand-charcoal/10 text-center space-y-3">
-        <p className="text-sm font-bold text-brand-charcoal">
-          No se encontró el expediente solicitado.
+      <div className="rounded-2xl bg-brand-red/10 p-8 text-center">
+        <ShieldAlert className="h-10 w-10 text-brand-red mx-auto" />
+        <p className="font-display text-lg font-bold mt-2">
+          Acceso Restringido al Equipo Legal
         </p>
-        <button
-          type="button"
-          onClick={() => router.push("/dashboard/admin?tab=mis-casos")}
-          className="inline-flex items-center gap-2 rounded-full bg-brand-charcoal px-5 py-2 text-xs font-semibold text-white"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          <span>Volver al Backoffice</span>
-        </button>
       </div>
     );
   }
 
-  const autoMetrics = calculateApplicationMetrics(appData);
-  const docsArray = appData.documents ? Object.values(appData.documents) : [];
-  const deliverablesArray = appData.officialDeliverables || [];
-  const meetingsArray = appData.meetings || [];
-  const auditLogsArray = appData.auditLogs || [];
-  const isCaseClosed =
+  if (loadingCase || !appData) {
+    return <DashboardContentSkeleton />;
+  }
+
+  const clientName = formatDisplayName(
+    appData.formData?.fullName || appData.clientName || "Cliente"
+  );
+  const fd = appData.formData || {};
+  const docsList: VaultDocumentItem[] =
+    Array.isArray(appData.documents) && appData.documents.length > 0
+      ? appData.documents
+      : getDefaultDocumentsByDestination(appData.destination);
+
+  const caseAuditLogs = Array.isArray(appData.auditLogs)
+    ? appData.auditLogs
+    : [];
+
+  const isCaseConcluded =
     appData.status === "approved" || appData.status === "rejected";
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 font-sans">
-      {/* 1. VISOR DE DOCUMENTOS INTEGRADO (IN-APP PREVIEW MODAL) */}
-      <DocumentPreviewModal
-        isOpen={Boolean(previewDoc)}
-        onClose={() => setPreviewDoc(null)}
-        title={previewDoc?.title || ""}
-        fileName={previewDoc?.fileName}
-        fileUrl={previewDoc?.fileUrl || ""}
-      />
-
-      {/* 5. MODAL PARA ESCRIBIR EL MOTIVO DE OBSERVACIÓN / RECHAZO DE UN DOCUMENTO */}
-      {rejectingDocItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-3xl bg-brand-white p-7 border border-brand-charcoal/10 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red/10 text-brand-red">
-                  <AlertCircle className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="font-display text-base font-bold text-brand-charcoal">
-                    Indicar Motivo de Observación
-                  </h3>
-                  <p className="text-[11px] text-brand-charcoal/55">
-                    {rejectingDocItem.title}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setRejectingDocItem(null)}
-                className="text-brand-charcoal/40 hover:text-brand-charcoal"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-brand-charcoal">
-                ¿Qué debe corregir el cliente en este archivo? *
-              </label>
-              <textarea
-                rows={3}
-                required
-                value={rejectReasonText}
-                onChange={(e) => setRejectReasonText(e.target.value)}
-                placeholder="Ej. La imagen del pasaporte salió cortada en la parte inferior. Por favor súbelo completo y sin reflejos de luz."
-                className="w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 p-3.5 text-xs sm:text-sm text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none"
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-brand-platinum">
-              <button
-                type="button"
-                onClick={() => setRejectingDocItem(null)}
-                className="rounded-full px-4 py-2 text-xs font-semibold text-brand-charcoal/70 hover:bg-brand-platinum"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={!rejectReasonText.trim()}
-                onClick={() =>
-                  handleVerifyDocument(
-                    rejectingDocItem.docId,
-                    "rejected",
-                    rejectReasonText
-                  )
-                }
-                className="inline-flex items-center gap-1.5 rounded-full bg-brand-red px-5 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-brand-red/90 disabled:opacity-50"
-              >
-                <XCircle className="h-3.5 w-3.5" />
-                <span>Notificar Observación al Cliente</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL UNIFICADO DE VALIDACIÓN Y DOBLE CONFIRMACIÓN */}
-      {transitionPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-brand-white p-7 border border-brand-charcoal/10 shadow-2xl space-y-5">
-            <div className="flex items-center gap-3">
-              <div
-                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${
-                  transitionPrompt.blockingErrors.length > 0
-                    ? "bg-brand-red/15 text-brand-red"
-                    : transitionPrompt.direction === "backward"
-                    ? "bg-amber-500/15 text-amber-600"
-                    : "bg-emerald-500/15 text-emerald-600"
-                }`}
-              >
-                {transitionPrompt.blockingErrors.length > 0 ? (
-                  <ShieldAlert className="h-5 w-5" />
-                ) : transitionPrompt.direction === "backward" ? (
-                  <RotateCcw className="h-5 w-5" />
-                ) : (
-                  <ArrowRightCircle className="h-5 w-5" />
-                )}
-              </div>
-              <div>
-                <h3 className="font-display text-lg font-bold text-brand-charcoal">
-                  {transitionPrompt.blockingErrors.length > 0
-                    ? "Cambio Bloqueado: Faltan Requisitos Obligatorios"
-                    : transitionPrompt.direction === "backward"
-                    ? `Confirmar Retroceso a ${transitionPrompt.targetLabel}`
-                    : `Confirmar Avance a ${transitionPrompt.targetLabel}`}
-                </h3>
-                <p className="text-xs text-brand-charcoal/55">
-                  Control de calidad y gobernanza de procesos migratorios
-                </p>
-              </div>
-            </div>
-
-            {transitionPrompt.blockingErrors.length > 0 ? (
-              <div className="space-y-3">
-                <p className="text-xs text-brand-charcoal/75 leading-relaxed">
-                  No es posible mover el expediente de{" "}
-                  <strong>
-                    {formatDisplayName(appData.formData?.fullName || appData.clientName)}
-                  </strong>{" "}
-                  a <strong>{transitionPrompt.targetLabel}</strong> porque aún no cumple con los siguientes requisitos obligatorios:
-                </p>
-                <div className="space-y-2">
-                  {transitionPrompt.blockingErrors.map((err, i) => (
-                    <div
-                      key={i}
-                      className="flex items-start gap-2.5 rounded-xl bg-brand-red/10 border border-brand-red/25 p-3.5 text-xs font-semibold text-brand-red"
-                    >
-                      <XCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                      <span>{err}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed">
-                  ¿Confirmas cambiar el estado del expediente de{" "}
-                  <strong>
-                    {formatDisplayName(appData.formData?.fullName || appData.clientName)}
-                  </strong>{" "}
-                  a{" "}
-                  <strong className="text-brand-charcoal">
-                    {transitionPrompt.targetLabel}
-                  </strong>
-                  ?
-                </p>
-
-                {transitionPrompt.warnings.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800">
-                      Observaciones detectadas antes de cambiar el estado:
-                    </p>
-                    {transitionPrompt.warnings.map((warn, i) => (
-                      <div
-                        key={i}
-                        className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-950"
-                      >
-                        <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-                        <span>{warn}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-brand-platinum">
-              <button
-                type="button"
-                onClick={() => setTransitionPrompt(null)}
-                className="rounded-full px-5 py-2.5 text-xs font-semibold text-brand-charcoal/70 hover:bg-brand-platinum transition-colors"
-              >
-                {transitionPrompt.blockingErrors.length > 0
-                  ? "Entendido, volver al caso"
-                  : "Cancelar"}
-              </button>
-
-              {transitionPrompt.blockingErrors.length === 0 && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    executeStageChange(transitionPrompt.targetStatus)
-                  }
-                  className="inline-flex items-center gap-1.5 rounded-full bg-brand-red px-6 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-brand-red/90 transition-all"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Sí, Confirmar Cambio de Estado</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL DE DICTAMEN CONSULAR FINAL */}
-      {showResolutionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-brand-white p-7 border border-brand-charcoal/10 shadow-2xl space-y-6">
-            <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-charcoal text-white">
-                  <Award className="h-5 w-5 text-brand-red" />
-                </div>
-                <div>
-                  <h3 className="font-display text-lg font-bold text-brand-charcoal">
-                    Emitir Resolución Consular Oficial
-                  </h3>
-                  <p className="text-xs text-brand-charcoal/55">
-                    Registra la decisión final de la Embajada para este expediente.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <button
-                type="button"
-                onClick={() => evaluateStageTransition("approved")}
-                className="group flex flex-col items-start justify-between rounded-2xl border-2 border-emerald-500/30 bg-emerald-500/[0.04] hover:bg-emerald-600 hover:border-emerald-600 p-5 text-left transition-all"
-              >
-                <CheckCircle2 className="h-7 w-7 text-emerald-600 group-hover:text-white mb-3 transition-colors" />
-                <div>
-                  <p className="font-display text-base font-bold text-brand-charcoal group-hover:text-white">
-                    Visa Aprobada
-                  </p>
-                  <p className="text-xs text-brand-charcoal/60 group-hover:text-white/80 mt-1">
-                    Marca el caso al 100% y suma +1 a tus KPIs de Visas Aprobadas.
-                  </p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => evaluateStageTransition("rejected")}
-                className="group flex flex-col items-start justify-between rounded-2xl border-2 border-brand-red/30 bg-brand-red/[0.04] hover:bg-brand-red hover:border-brand-red p-5 text-left transition-all"
-              >
-                <XCircle className="h-7 w-7 text-brand-red group-hover:text-white mb-3 transition-colors" />
-                <div>
-                  <p className="font-display text-base font-bold text-brand-charcoal group-hover:text-white">
-                    Visa Rechazada
-                  </p>
-                  <p className="text-xs text-brand-charcoal/60 group-hover:text-white/80 mt-1">
-                    Cierra el expediente como denegado y actualiza las métricas de rechazo.
-                  </p>
-                </div>
-              </button>
-            </div>
-
-            <div className="flex justify-end pt-2 border-t border-brand-platinum">
-              <button
-                type="button"
-                onClick={() => setShowResolutionModal(false)}
-                className="rounded-full px-5 py-2 text-xs font-semibold text-brand-charcoal/60 hover:bg-brand-platinum transition-colors"
-              >
-                Cerrar sin cambios
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Barra Superior */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <button
-          type="button"
-          onClick={() => router.push("/dashboard/admin?tab=mis-casos")}
-          className="inline-flex items-center gap-2 rounded-full bg-brand-white border border-brand-charcoal/10 px-4 py-2 text-xs font-semibold text-brand-charcoal hover:bg-brand-platinum transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          <span>Volver a Mis Procesos</span>
-        </button>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-brand-charcoal/60">
-              Asesor asignado:
-            </span>
-            <select
-              value={appData.assignedAdvisorId || ""}
-              onChange={(e) => handleChangeAdvisor(e.target.value)}
-              className="h-9 rounded-full bg-brand-white border border-brand-charcoal/15 px-3.5 text-xs font-bold text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-brand-red"
+    <div className="space-y-8 font-sans">
+      {/* CABECERA DEL WORKSPACE */}
+      <div className="rounded-3xl bg-brand-charcoal text-white p-6 sm:p-8 border border-white/10 shadow-lg space-y-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/10 pb-5">
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/admin?tab=gobernanza")}
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-white/70 hover:text-brand-red transition-colors mb-1"
             >
-              <option value="">⚠️ Sin Asignar (En Bolsa)</option>
-              {staffList.map((s) => (
-                <option key={s.uid} value={s.uid}>
-                  {formatDisplayName(s.fullName)} ({s.role === "admin" ? "Admin" : "Asesor"})
+              <ArrowLeft className="h-4 w-4" />
+              <span>Volver al Monitor de Operaciones</span>
+            </button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h2 className="font-display text-2xl sm:text-3xl font-bold">
+                {clientName}
+              </h2>
+              <span className="rounded-full bg-brand-red px-3 py-0.5 font-mono text-[10px] font-bold uppercase">
+                {appData.destination === "JAPAN"
+                  ? "🇯🇵 Japón MOFA"
+                  : "🇺🇸 EE. UU. B1/B2"}
+              </span>
+              <span className="rounded-full bg-white/10 px-3 py-0.5 font-mono text-[10px] font-bold uppercase">
+                Plan {appData.planTier}
+              </span>
+            </div>
+            <p className="text-xs text-white/70 flex items-center gap-2">
+              <Mail className="h-3.5 w-3.5 text-brand-red" />
+              <span>{appData.clientEmail}</span>
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <UserCheck className="h-4 w-4 text-brand-red shrink-0" />
+              <select
+                aria-label="Asignar especialista legal"
+                value={appData.assignedAdvisorId || ""}
+                onChange={(e) => handleAssignAdvisor(e.target.value)}
+                className="h-10 rounded-full bg-white/10 border border-white/15 px-4 text-xs font-bold text-white focus:outline-none focus:border-brand-red"
+              >
+                <option value="" className="text-brand-charcoal">
+                  ⚠️ Sin Asesor (En Bolsa)
                 </option>
-              ))}
-            </select>
+                {staffList.map((s) => (
+                  <option
+                    key={s.uid}
+                    value={s.uid}
+                    className="text-brand-charcoal"
+                  >
+                    {formatDisplayName(s.fullName)} ({s.role.toUpperCase()})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleUpdateFinalConsularStatus("approved")}
+              className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-bold text-white transition-all"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              <span>Visa Aprobada</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleUpdateFinalConsularStatus("rejected")}
+              className="inline-flex items-center gap-1.5 rounded-full bg-brand-red hover:bg-brand-red/90 px-4 py-2 text-xs font-bold text-white transition-all"
+            >
+              <XCircle className="h-3.5 w-3.5" />
+              <span>Rechazada</span>
+            </button>
+          </div>
+        </div>
+
+        {/* CONTROL DE ENMASCARAMIENTO PII CON BÓVEDA SUBCOLECCIÓN */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl bg-white/5 border border-white/10 p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red/20 text-brand-red">
+              <Lock className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white">
+                Aislamiento Criptográfico de Subcolección PII (`private_pii/vault`)
+              </p>
+              <p className="text-[11px] text-white/65">
+                Cédula, Pasaporte e Ingresos no viajan en la carga inicial; se
+                descargan bajo demanda y quedan auditados en el SIEM.
+              </p>
+            </div>
           </div>
 
           <button
             type="button"
-            onClick={() => setShowResolutionModal(true)}
-            className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold shadow-xs transition-all ${
-              appData.status === "approved"
-                ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                : appData.status === "rejected"
-                ? "bg-brand-red text-white hover:bg-brand-red/90"
-                : "bg-brand-charcoal text-white hover:bg-brand-red"
+            onClick={handleToggleRevealPii}
+            className={`inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold transition-all shrink-0 ${
+              piiRevealed
+                ? "bg-amber-500 text-brand-charcoal"
+                : "bg-white/10 hover:bg-brand-red text-white border border-white/15"
             }`}
           >
-            <Award className="h-3.5 w-3.5" />
-            <span>
-              {appData.status === "approved"
-                ? "Dictamen: Visa Aprobada (Cambiar)"
-                : appData.status === "rejected"
-                ? "Dictamen: Visa Rechazada (Cambiar)"
-                : "Emitir Dictamen Consular"}
-            </span>
+            {piiRevealed ? (
+              <>
+                <EyeOff className="h-4 w-4" />
+                <span>Ocultar Datos PII</span>
+              </>
+            ) : (
+              <>
+                <Eye className="h-4 w-4" />
+                <span>Revelar Datos Sensibles</span>
+              </>
+            )}
           </button>
         </div>
       </div>
 
-      {/* Cabecera Ejecutiva */}
-      <div className="rounded-3xl bg-brand-charcoal p-7 sm:p-8 text-white shadow-xl space-y-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-red/20 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-brand-red">
-                <Sparkles className="h-3 w-3" />
-                <span>Sincronización en Tiempo Real Activa</span>
-              </span>
-              <span className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-bold uppercase text-white/80">
-                {appData.destination === "JAPAN" ? "🇯🇵 Japón" : "🇺🇸 Estados Unidos"} • Plan {appData.planTier || "Priority Pro"}
-              </span>
-              {isCaseClosed && (
-                <span
-                  className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase ${
-                    appData.status === "approved"
-                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                      : "bg-brand-red/30 text-red-200 border border-brand-red/50"
-                  }`}
-                >
-                  {appData.status === "approved"
-                    ? "✅ Resolución: Visa Aprobada"
-                    : "❌ Resolución: Visa Rechazada"}
-                </span>
-              )}
-            </div>
-            <h2 className="font-display text-2xl sm:text-3xl font-bold">
-              {formatDisplayName(appData.formData?.fullName || appData.clientName) || "Cliente Titular"}
-            </h2>
-            <p className="text-xs text-white/65">
-              Correo: <strong className="text-white">{appData.clientEmail}</strong> • Teléfono:{" "}
-              <strong className="text-white">
-                {appData.formData?.mobilePhone || "Pendiente"}
-              </strong>{" "}
-              • Cédula:{" "}
-              <strong className="text-white">
-                {appData.formData?.nationalId || "Pendiente"}
-              </strong>
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-white/[0.06] p-4 border border-white/10 text-center min-w-[160px] shrink-0">
-            <p className="text-[10px] uppercase tracking-widest text-white/50 font-bold">
-              Avance Automático
-            </p>
-            <p className="font-display text-3xl font-bold text-brand-red mt-1">
-              {autoMetrics.progressPercentage}%
-            </p>
-            <p className="text-[11px] text-white/60 mt-0.5">
-              Paso {autoMetrics.currentStep} de 4
-            </p>
-          </div>
-        </div>
-
-        {/* Stepper Horizontal Limpio de 4 Etapas Operativas */}
-        <div className="pt-4 border-t border-white/10 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-white/45">
-              Flujo de Etapas del Trámite (4 Pasos)
-            </p>
-            <span className="text-[10px] text-white/45">
-              Valida requisitos obligatorios al avanzar o retroceder
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-            {PROCESS_STAGES.map((st) => {
-              const isCurrent =
-                appData.status === st.id ||
-                (!isCaseClosed && autoMetrics.currentStep === st.order);
-              const isCompleted =
-                isCaseClosed || autoMetrics.currentStep > st.order;
-
-              return (
-                <button
-                  key={st.id}
-                  type="button"
-                  onClick={() => evaluateStageTransition(st.id)}
-                  className={`flex flex-col items-start rounded-2xl p-4 border text-left transition-all ${
-                    isCurrent
-                      ? "bg-white text-brand-charcoal border-white shadow-lg"
-                      : isCompleted
-                      ? "bg-emerald-500/15 border-emerald-500/35 text-white hover:bg-emerald-500/25"
-                      : "bg-white/[0.04] border-white/10 text-white/65 hover:bg-white/10 hover:text-white"
-                  }`}
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-bold leading-tight">
-                      {st.label}
-                    </span>
-                    {isCompleted && !isCurrent && (
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                    )}
-                  </div>
-                  <span
-                    className={`text-[11px] mt-1 ${
-                      isCurrent ? "text-brand-charcoal/65" : "text-white/55"
-                    }`}
-                  >
-                    {st.desc}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
       {feedback && (
-        <div className="flex items-center justify-between gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-700">
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-semibold text-emerald-800">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
             <span>{feedback}</span>
           </div>
           <button
             type="button"
             onClick={() => setFeedback("")}
-            className="rounded-lg p-1 text-emerald-700/60 hover:bg-emerald-500/20 hover:text-emerald-900 transition-colors"
-            aria-label="Cerrar alerta"
+            className="p-1"
+            aria-label="Cerrar mensaje"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
       )}
+
       {errorMsg && (
         <div className="flex items-center justify-between gap-3 rounded-xl bg-brand-red/10 border border-brand-red/30 p-4 text-xs font-semibold text-brand-red">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{errorMsg}</span>
           </div>
           <button
             type="button"
             onClick={() => setErrorMsg("")}
-            className="rounded-lg p-1 text-brand-red/60 hover:bg-brand-red/20 hover:text-brand-red transition-colors"
-            aria-label="Cerrar alerta"
+            className="p-1"
+            aria-label="Cerrar error"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
       )}
 
-      {/* Banner de Decomisionamiento PII */}
-      {isCaseClosed &&
-        !appData.isDecommissioned &&
-        profile?.role === "admin" && (
-          <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <p className="text-xs font-bold text-amber-950 uppercase tracking-wide flex items-center gap-2">
-                <ArchiveRestore className="h-4 w-4 text-amber-700" />
-                <span>Decomisionamiento Seguro de Información (FinOps & PII)</span>
-              </p>
-              <p className="text-xs text-amber-900/80 leading-relaxed max-w-2xl">
-                Este trámite ya concluyó ({appData.status.toUpperCase()}). Puedes purgar los PDFs pesados de Storage y los datos sensibles dejando intacta la estadística en tus KPIs.
+      {/* RESPUESTAS DEL FORMULARIO INTELIGENTE */}
+      <section className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-5">
+        <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
+          <div className="flex items-center gap-2.5">
+            <FileText className="h-5 w-5 text-brand-red" />
+            <h3 className="font-display text-lg font-bold text-brand-charcoal">
+              Respuestas del Formulario Inteligente (
+              {appData.destination === "JAPAN" ? "Japón MOFA" : "DS-160"})
+            </h3>
+          </div>
+          <span className="font-mono text-[11px] font-bold text-brand-charcoal/65">
+            {piiRevealed ? "🔓 BÓVEDA PII DESBLOQUEADA" : "🔒 BÓVEDA PII SELLADA"}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+          <div className="rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10">
+            <span className="text-[10px] font-mono font-bold uppercase text-brand-red block">
+              CÉDULA / DNI (PII)
+            </span>
+            <p className="font-mono text-sm font-bold text-brand-charcoal mt-1">
+              {piiRevealed
+                ? unmaskedVaultPii?.nationalId || fd.nationalId || "Pendiente"
+                : maskSensitiveValue(fd.nationalId)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10">
+            <span className="text-[10px] font-mono font-bold uppercase text-brand-red block">
+              PASAPORTE (PII)
+            </span>
+            <p className="font-mono text-sm font-bold text-brand-charcoal mt-1">
+              {piiRevealed
+                ? unmaskedVaultPii?.passportNumber ||
+                  fd.passportNumber ||
+                  "Pendiente"
+                : maskSensitiveValue(fd.passportNumber)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10">
+            <span className="text-[10px] font-mono font-bold uppercase text-brand-red block">
+              INGRESOS MENSUALES (PII)
+            </span>
+            <p className="font-mono text-sm font-bold text-brand-charcoal mt-1">
+              {piiRevealed
+                ? unmaskedVaultPii?.monthlyIncomeCop ||
+                  fd.monthlyIncomeCop ||
+                  "Pendiente"
+                : maskSensitiveValue(fd.monthlyIncomeCop)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10">
+            <span className="text-[10px] font-mono font-bold uppercase text-brand-red block">
+              TELÉFONO MÓVIL (PII)
+            </span>
+            <p className="font-mono text-sm font-bold text-brand-charcoal mt-1">
+              {piiRevealed
+                ? unmaskedVaultPii?.mobilePhone ||
+                  fd.mobilePhone ||
+                  "Pendiente"
+                : maskSensitiveValue(fd.mobilePhone)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-brand-platinum/30 p-4 border border-brand-platinum">
+            <span className="text-[10px] font-bold uppercase text-brand-charcoal/60 block">
+              Fecha Llegada & Duración
+            </span>
+            <p className="font-bold text-brand-charcoal mt-1">
+              {fd.intendedArrivalDate || "---"} (
+              {fd.intendedStayDuration || "---"})
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-brand-platinum/30 p-4 border border-brand-platinum">
+            <span className="text-[10px] font-bold uppercase text-brand-charcoal/60 block">
+              Ciudades Destino
+            </span>
+            <p className="font-bold text-brand-charcoal mt-1">
+              {fd.destinationCities || "Pendiente"}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-brand-platinum/30 p-4 border border-brand-platinum">
+            <span className="text-[10px] font-bold uppercase text-brand-charcoal/60 block">
+              Empresa y Cargo
+            </span>
+            <p className="font-bold text-brand-charcoal mt-1">
+              {fd.employerOrBusinessName || "---"} • {fd.jobTitle || "---"}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-brand-platinum/30 p-4 border border-brand-platinum">
+            <span className="text-[10px] font-bold uppercase text-brand-charcoal/60 block">
+              Rechazos Previos / Viajes
+            </span>
+            <p className="font-bold text-brand-charcoal mt-1">
+              Rechazos: {fd.previousVisaRefusal || "No"} •{" "}
+              {fd.internationalTravelHistory || "Sin viajes"}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* AUDITORÍA DE BÓVEDA DOCUMENTAL ESTILO FINTECH EJECUTIVO */}
+      <section className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-brand-platinum pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-charcoal text-white">
+              <FolderLock className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-display text-lg font-bold text-brand-charcoal">
+                Bóveda Documental del Expediente ({docsList.length} requisitos)
+              </h3>
+              <p className="text-xs text-brand-charcoal/70">
+                Los controles de dictamen, previsualización y eliminación
+                individual se activan cuando el cliente sube cada soporte.
               </p>
             </div>
+          </div>
+
+          {profile?.role === "admin" && isCaseConcluded && (
             <button
               type="button"
-              onClick={handleDecommissionCase}
-              disabled={decommissioning}
-              className="shrink-0 inline-flex items-center gap-2 rounded-full bg-brand-charcoal px-5 py-2.5 text-xs font-semibold text-white hover:bg-brand-red transition-all"
+              onClick={handleZeroTrustPurgeVault}
+              disabled={purgingVault}
+              className="inline-flex items-center gap-2 rounded-full border border-brand-red/40 bg-brand-red/10 hover:bg-brand-red hover:text-white px-4 py-2 text-xs font-bold text-brand-red transition-all"
             >
               <Trash2 className="h-3.5 w-3.5" />
               <span>
-                {decommissioning ? "Purgando PII..." : "Purgar PII y Archivar"}
+                {purgingVault
+                  ? "Purgando Storage..."
+                  : "Purga Post-Trámite (Zero-Trust)"}
               </span>
             </button>
-          </div>
-        )}
-
-      {/* Selector de 5 Pestañas del Workspace (Incluye Audit Trail Inmutable) */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-brand-charcoal/10 pb-3">
-        {[
-          {
-            id: "cuestionario",
-            label: "1. Cuestionario",
-            icon: FileText,
-            semaforo: autoMetrics.formSemaphore,
-          },
-          {
-            id: "boveda",
-            label: `2. Bóveda (${docsArray.length})`,
-            icon: FolderLock,
-            semaforo: autoMetrics.vaultSemaphore,
-          },
-          {
-            id: "entregables",
-            label: `3. Subir DS-160 / Confirmaciones (${deliverablesArray.length})`,
-            icon: FileCheck2,
-            semaforo:
-              deliverablesArray.length > 0 ? "completed" : "in_progress",
-          },
-          {
-            id: "meetings",
-            label: `4. Meetings (${meetingsArray.length})`,
-            icon: Calendar,
-            semaforo: autoMetrics.consularSemaphore,
-          },
-          {
-            id: "auditoria",
-            label: `5. Auditoría Inmutable (${auditLogsArray.length})`,
-            icon: History,
-            semaforo: "completed" as const,
-          },
-        ].map((tab) => {
-          const Icon = tab.icon;
-          const active = activeWorkspaceTab === tab.id;
-          const dotColor =
-            tab.semaforo === "completed"
-              ? "bg-emerald-500"
-              : tab.semaforo === "in_progress"
-              ? "bg-amber-500"
-              : "bg-brand-red";
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveWorkspaceTab(tab.id as any)}
-              className={`inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-xs font-bold transition-all ${
-                active
-                  ? "bg-brand-charcoal text-white shadow-sm"
-                  : "bg-brand-white text-brand-charcoal/70 border border-brand-charcoal/10 hover:bg-brand-platinum"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              <span>{tab.label}</span>
-              <span className={`h-2 w-2 rounded-full ${dotColor}`} />
-            </button>
-          );
-        })}
-      </div>
-
-      {/* TAB 1: RESPUESTAS DEL CUESTIONARIO ESTRATÉGICO + INTERRUPTOR DE CANDADO */}
-      {activeWorkspaceTab === "cuestionario" && (
-        <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-brand-platinum pb-4">
-            <div>
-              <h3 className="font-display text-lg font-bold text-brand-charcoal">
-                Información Diligenciada por el Cliente (En Vivo)
-              </h3>
-              <p className="text-xs text-brand-charcoal/55">
-                Haz clic en cualquier tarjeta para copiar su texto al portapapeles.
-              </p>
-            </div>
-
-            {/* 4. Control para Bloquear / Desbloquear la Edición del Cuestionario cuando está en Etapa >= 3 */}
-            {(appData.status === "in_legal_review" ||
-              appData.status === "ready_for_consulate" ||
-              appData.status === "approved" ||
-              appData.status === "rejected") && (
-              <button
-                type="button"
-                onClick={handleToggleFormLock}
-                className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition-all shrink-0 ${
-                  appData.formUnlockedByAdvisor
-                    ? "bg-amber-500/15 text-amber-800 border border-amber-500/35"
-                    : "bg-brand-charcoal text-white hover:bg-brand-red"
-                }`}
-              >
-                {appData.formUnlockedByAdvisor ? (
-                  <>
-                    <Unlock className="h-3.5 w-3.5" />
-                    <span>Edición Desbloqueada (Volver a Bloquear)</span>
-                  </>
-                ) : (
-                  <>
-                    <Lock className="h-3.5 w-3.5" />
-                    <span>Cuestionario Protegido (Permitir Edición)</span>
-                  </>
-                )}
-              </button>
-            )}
-          </div>
-
-          {!appData.formData ? (
-            <div className="py-12 text-center space-y-2">
-              <Clock className="h-8 w-8 text-brand-red mx-auto" />
-              <p className="text-sm font-bold text-brand-charcoal">
-                El cliente aún no ha guardado respuestas en su Cuestionario Estratégico.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {[
-                { label: "Nombre Completo (Pasaporte)", val: appData.formData.fullName },
-                { label: "No. de Cédula / ID Nacional", val: appData.formData.nationalId },
-                { label: "Estado Civil", val: appData.formData.maritalStatus },
-                { label: "Teléfono Móvil (WhatsApp)", val: appData.formData.mobilePhone },
-                { label: "Ciudad y Departamento", val: appData.formData.cityAndState },
-                { label: "Dirección de Domicilio", val: appData.formData.homeAddress },
-                { label: "Fecha Probable de Entrada", val: appData.formData.estimatedArrivalDate },
-                { label: "Días Previstos de Estancia", val: appData.formData.stayDurationDays },
-                { label: "¿Quién costea el viaje?", val: appData.formData.tripFinancier },
-                { label: "Ocupación o Cargo Actual", val: appData.formData.currentOccupation },
-                { label: "Empresa o Empleador Actual", val: appData.formData.companyOrEmployerName },
-                { label: "Ingreso Mensual Aproximado", val: appData.formData.monthlyIncomeLocal },
-                ...(appData.destination === "JAPAN"
-                  ? [
-                      {
-                        label: "Ocupación de Pareja o Padres (Japón Pág. 2)",
-                        val: appData.formData.partnerOrParentsOccupation,
-                      },
-                      {
-                        label: "Ciudades a Visitar (Schedule of Stay)",
-                        val: appData.formData.japanCitiesToVisit,
-                      },
-                      {
-                        label: "Aeropuerto de Entrada (Japón)",
-                        val: appData.formData.japanPortOfEntry,
-                      },
-                      {
-                        label: "Aerolínea Proyectada",
-                        val: appData.formData.japanAirlineOrFlight,
-                      },
-                      {
-                        label: "Visitas Previas a Japón",
-                        val: appData.formData.previousStayInJapan,
-                      },
-                      {
-                        label: "Garante / Invitante en Japón",
-                        val:
-                          appData.formData.hasGuarantorInJapan === "yes"
-                            ? `Sí: ${appData.formData.guarantorDetails}`
-                            : "No (Turismo independiente)",
-                      },
-                    ]
-                  : [
-                      {
-                        label: "Nombres y Fechas de Nacimiento de Padres (DS-160)",
-                        val: appData.formData.parentsFullNamesAndDob,
-                      },
-                      {
-                        label: "Redes Sociales Públicas (@usuario)",
-                        val: appData.formData.socialMediaHandles,
-                      },
-                      {
-                        label: "Resumen Empleos (5 años) y Universidad",
-                        val: appData.formData.previousJobsAndEducationSummary,
-                      },
-                      {
-                        label: "Familiares en EE. UU.",
-                        val: appData.formData.hasRelativesInUS === "yes" ? "Sí" : "No",
-                      },
-                      {
-                        label: "Rechazos de Visa Previos",
-                        val: appData.formData.hasPreviousVisaRefusal === "yes" ? "Sí" : "No",
-                      },
-                    ]),
-              ].map((item) => (
-                <div
-                  key={item.label}
-                  onClick={() => handleCopyText(item.label, item.val)}
-                  className="group cursor-pointer rounded-2xl bg-brand-platinum/40 hover:bg-brand-platinum/80 p-4 border border-brand-platinum flex items-start justify-between gap-3 transition-all"
-                >
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-semibold text-brand-charcoal/55 block">
-                      {item.label}
-                    </span>
-                    <p className="text-xs sm:text-sm font-bold text-brand-charcoal break-words">
-                      {item.val || "---"}
-                    </p>
-                  </div>
-                  <span className="shrink-0 rounded-lg bg-brand-white p-2 text-brand-charcoal/50 group-hover:text-brand-red shadow-2xs">
-                    {copiedField === item.label ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
-                    )}
-                  </span>
-                </div>
-              ))}
-            </div>
           )}
         </div>
-      )}
 
-      {/* TAB 2: BÓVEDA DE DOCUMENTOS CON VISOR INTEGRADO Y FEEDBACK DE OBSERVACIÓN */}
-      {activeWorkspaceTab === "boveda" && (
-        <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-6">
-          <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
-            <div>
-              <h3 className="font-display text-lg font-bold text-brand-charcoal">
-                Soportes Cargados por el Cliente ({docsArray.length})
-              </h3>
-              <p className="text-xs text-brand-charcoal/55">
-                Haz clic en &ldquo;Vista Previa&rdquo; para abrir el visor integrado sin salir de la página.
-              </p>
-            </div>
-          </div>
+        <div className="divide-y divide-brand-platinum border border-brand-charcoal/10 rounded-2xl overflow-hidden">
+          {docsList.map((docItem) => {
+            const hasUploadedFile = Boolean(docItem.fileUrl);
 
-          {docsArray.length === 0 ? (
-            <div className="py-12 text-center space-y-2">
-              <FolderLock className="h-8 w-8 text-brand-red mx-auto" />
-              <p className="text-sm font-bold text-brand-charcoal">
-                El cliente aún no ha subido archivos a su Bóveda.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {docsArray.map((docItem) => (
-                <div
-                  key={docItem.docId}
-                  className="rounded-2xl bg-brand-platinum/30 p-5 border border-brand-platinum space-y-3"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-bold text-brand-charcoal">
-                          {docItem.title}
-                        </p>
-                        <span
-                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase ${
-                            docItem.status === "verified"
-                              ? "bg-emerald-500/15 text-emerald-700"
-                              : docItem.status === "rejected"
-                              ? "bg-brand-red/15 text-brand-red"
-                              : "bg-amber-500/15 text-amber-800"
-                          }`}
-                        >
-                          {docItem.status === "verified"
-                            ? "Verificado"
-                            : docItem.status === "rejected"
-                            ? "Observado"
-                            : "En Revisión"}
-                        </span>
-                      </div>
-                      <p className="text-xs text-brand-charcoal/60">
-                        Archivo: <strong>{docItem.fileName}</strong> •{" "}
-                        {(docItem.fileSize / 1024 / 1024).toFixed(2)} MB
-                      </p>
-                    </div>
+            const statusBadge =
+              docItem.status === "verified"
+                ? {
+                    text: "Verificado",
+                    cls: "bg-emerald-500/15 text-emerald-800 border-emerald-500/30",
+                  }
+                : docItem.status === "uploaded"
+                ? {
+                    text: "Listo para Revisión",
+                    cls: "bg-amber-500/15 text-amber-900 border-amber-500/30",
+                  }
+                : docItem.status === "rejected"
+                ? {
+                    text: "Ajuste Solicitado",
+                    cls: "bg-brand-red/15 text-brand-red border-brand-red/30",
+                  }
+                : {
+                    text: "Esperando al Cliente",
+                    cls: "bg-brand-platinum text-brand-charcoal/65 border-brand-charcoal/10",
+                  };
 
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPreviewDoc({
-                            title: docItem.title,
-                            fileName: docItem.fileName,
-                            fileUrl: docItem.fileUrl,
-                          })
-                        }
-                        className="inline-flex items-center gap-1.5 rounded-full bg-brand-charcoal px-4 py-2 text-xs font-semibold text-white hover:bg-brand-red transition-colors"
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                        <span>Vista Previa</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleVerifyDocument(docItem.docId, "verified")
-                        }
-                        className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3.5 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-500/25 transition-colors"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        <span>Verificar</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRejectingDocItem(docItem);
-                          setRejectReasonText(docItem.advisorFeedback || "");
-                        }}
-                        className="inline-flex items-center gap-1 rounded-full bg-brand-red/10 border border-brand-red/25 px-3.5 py-2 text-xs font-bold text-brand-red hover:bg-brand-red/20 transition-colors"
-                      >
-                        <XCircle className="h-3.5 w-3.5" />
-                        <span>Observar con Motivo</span>
-                      </button>
-                    </div>
+            return (
+              <div
+                key={docItem.id}
+                className="p-5 bg-brand-white hover:bg-brand-platinum/20 transition-colors flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+              >
+                <div className="space-y-1 max-w-xl">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="font-display text-sm font-bold text-brand-charcoal">
+                      {docItem.title}
+                    </span>
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase ${statusBadge.cls}`}
+                    >
+                      {statusBadge.text}
+                    </span>
                   </div>
+                  <p className="text-xs text-brand-charcoal/65">
+                    {docItem.description}
+                  </p>
 
-                  {docItem.status === "rejected" && docItem.advisorFeedback && (
-                    <div className="rounded-xl bg-brand-red/10 border border-brand-red/25 p-3 text-xs text-brand-red">
-                      <strong>Motivo enviado al cliente:</strong>{" "}
-                      {docItem.advisorFeedback}
+                  {hasUploadedFile && (
+                    <div className="pt-1.5 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewVaultDoc(docItem)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-brand-platinum/70 hover:bg-brand-charcoal hover:text-white px-3 py-1.5 text-xs font-bold text-brand-charcoal transition-colors"
+                      >
+                        <Eye className="h-3.5 w-3.5 text-brand-red" />
+                        <span>
+                          Previsualizar ({docItem.fileName || "Documento"})
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSingleDocument(docItem)}
+                        title="Eliminar este archivo individualmente"
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-charcoal/55 hover:text-brand-red transition-colors"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span>Eliminar archivo</span>
+                      </button>
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
-      {/* TAB 3: SUBIR ENTREGABLES OFICIALES AL PERFIL DEL CLIENTE */}
-      {activeWorkspaceTab === "entregables" && (
-        <div className="space-y-6">
-          <form
-            onSubmit={handleUploadOfficialDeliverable}
-            className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-5"
-          >
-            <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
-              <FileCheck2 className="h-5 w-5 text-brand-red" />
-              <div>
-                <h3 className="font-display text-base font-bold text-brand-charcoal">
-                  Subir Documentos Oficiales al Perfil del Cliente (DS-160, Confirmaciones, Itinerarios)
-                </h3>
-                <p className="text-xs text-brand-charcoal/55">
-                  Los archivos que cargues aquí aparecerán automáticamente en el Perfil del cliente y le enviarán una notificación interna.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Tipo de Documento Oficial *
-                </label>
-                <select
-                  value={delivCategory}
-                  onChange={(e) => setDelivCategory(e.target.value as any)}
-                  className={inputBaseClass}
-                >
-                  <option value="Confirmación DS-160">
-                    🇺🇸 Hoja de Confirmación DS-160 Oficial
-                  </option>
-                  <option value="Cita Consular / CAS">
-                    📅 Confirmación de Cita Consular / CAS
-                  </option>
-                  <option value="Formulario Embajada Japón">
-                    🇯🇵 Formulario Oficial de Visado Japonés
-                  </option>
-                  <option value="Schedule of Stay (Itinerario)">
-                    🗾 Schedule of Stay (Programa de Estancia Japón)
-                  </option>
-                  <option value="Otro Documento Oficial">
-                    📄 Otro Documento / Carta de Garantía
-                  </option>
-                </select>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Título Personalizado (Opcional)
-                </label>
-                <input
-                  type="text"
-                  value={delivTitle}
-                  onChange={(e) => setDelivTitle(e.target.value)}
-                  placeholder="Ej. Confirmación DS-160 Lista para Imprimir"
-                  className={inputBaseClass}
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2 border-t border-brand-platinum">
-              <label className="cursor-pointer inline-flex items-center gap-2.5 rounded-xl border border-dashed border-brand-red/40 bg-brand-red/[0.02] px-4 py-3 text-xs font-semibold text-brand-charcoal hover:bg-brand-red/[0.06] transition-all">
-                <UploadCloud className="h-4 w-4 text-brand-red" />
-                <span className="truncate max-w-xs">
-                  {delivFile
-                    ? `📄 ${delivFile.name}`
-                    : "Seleccionar PDF o Imagen Oficial desde tu computador *"}
-                </span>
-                <input
-                  type="file"
-                  required
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  className="hidden"
-                  onChange={(e) => setDelivFile(e.target.files?.[0] || null)}
-                />
-              </label>
-
-              <button
-                type="submit"
-                disabled={uploadingDeliv || !delivFile}
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-7 py-3 text-xs font-semibold text-brand-white shadow-md shadow-brand-red/20 hover:bg-brand-red/90 disabled:opacity-50 transition-all"
-              >
-                <UploadCloud className="h-4 w-4" />
-                <span>
-                  {uploadingDeliv
-                    ? "Subiendo al Perfil..."
-                    : "Publicar en el Perfil del Cliente"}
-                </span>
-              </button>
-            </div>
-          </form>
-
-          <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-4">
-            <h4 className="font-display text-base font-bold text-brand-charcoal">
-              Documentos Oficiales Activos en el Perfil de este Cliente ({deliverablesArray.length})
-            </h4>
-
-            {deliverablesArray.length === 0 ? (
-              <p className="text-xs text-brand-charcoal/50 py-4">
-                Aún no has cargado confirmaciones ni formularios oficiales al perfil de este cliente.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {deliverablesArray.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl bg-brand-platinum/30 p-4 border border-brand-platinum"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="rounded-full bg-brand-charcoal px-2.5 py-0.5 text-[10px] font-bold text-white uppercase">
-                          {item.category}
-                        </span>
-                        <p className="text-xs font-bold text-brand-charcoal">
-                          {item.title}
-                        </p>
-                      </div>
-                      <p className="text-[11px] text-brand-charcoal/55">
-                        Archivo: {item.fileName} • Subido por {item.uploadedBy}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
+                {hasUploadedFile ? (
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
+                    <input
+                      type="text"
+                      value={docFeedbackMap[docItem.id] || ""}
+                      onChange={(e) =>
+                        setDocFeedbackMap((prev) => ({
+                          ...prev,
+                          [docItem.id]: e.target.value,
+                        }))
+                      }
+                      placeholder="Observación (si pides ajuste)..."
+                      className="h-9 sm:w-56 rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 px-3 text-xs text-brand-charcoal focus:bg-white focus:border-brand-red focus:outline-none"
+                    />
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() =>
-                          setPreviewDoc({
-                            title: item.title,
-                            fileName: item.fileName,
-                            fileUrl: item.fileUrl,
-                          })
-                        }
-                        className="inline-flex items-center gap-1.5 rounded-full bg-brand-charcoal px-4 py-2 text-xs font-semibold text-white hover:bg-brand-red transition-colors"
+                        onClick={() => handleReviewDocument(docItem, "verified")}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-brand-charcoal hover:bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white transition-all"
                       >
-                        <Eye className="h-3.5 w-3.5" />
-                        <span>Vista Previa</span>
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        <span>Aprobar</span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDeleteOfficialDeliverable(item)}
-                        className="p-2 text-brand-charcoal/40 hover:text-brand-red transition-colors"
-                        title="Eliminar archivo"
+                        onClick={() => handleReviewDocument(docItem, "rejected")}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-brand-red/30 bg-brand-red/10 hover:bg-brand-red hover:text-white px-3.5 py-2 text-xs font-bold text-brand-red transition-all"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <XCircle className="h-3.5 w-3.5" />
+                        <span>Ajuste</span>
                       </button>
                     </div>
                   </div>
-                ))}
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-brand-charcoal/50 font-medium shrink-0">
+                    <Clock className="h-3.5 w-3.5" />
+                    <span>Sin archivo cargado por el titular</span>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            );
+          })}
         </div>
-      )}
+      </section>
 
-      {/* TAB 4: REGISTRAR MEETINGS, NOTAS Y SUBIR ATTACHMENTS */}
-      {activeWorkspaceTab === "meetings" && (
-        <div className="space-y-6">
-          <form
-            onSubmit={handleAddMeeting}
-            className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-5"
-          >
-            <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
-              <Calendar className="h-5 w-5 text-brand-red" />
-              <div>
-                <h3 className="font-display text-base font-bold text-brand-charcoal">
-                  Registrar Meeting o Simulacro Consular
-                </h3>
-                <p className="text-xs text-brand-charcoal/55">
-                  Deja constancia de la fecha en que se realizó la sesión, las notas estratégicas y acuerdos con el cliente.
-                </p>
-              </div>
+      {/* EMISIÓN DE ENTREGABLES OFICIALES Y AGENDAMIENTO GOOGLE MEET */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+        <form
+          onSubmit={handleUploadDeliverable}
+          className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-4"
+        >
+          <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
+            <UploadCloud className="h-5 w-5 text-brand-red" />
+            <div>
+              <h3 className="font-display text-base font-bold text-brand-charcoal">
+                Emitir Entregable Oficial al Cliente
+              </h3>
+              <p className="text-xs text-brand-charcoal/70">
+                Hoja de Confirmación DS-160, Citas CAS o Schedule of Stay.
+              </p>
             </div>
+          </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Fecha del Meeting *
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={meetingDate}
-                  onChange={(e) => setMeetingDate(e.target.value)}
-                  className={inputBaseClass}
-                />
-              </div>
+          <div className="space-y-3">
+            <input
+              type="text"
+              required
+              value={delivLabel}
+              onChange={(e) => setDelivLabel(e.target.value)}
+              placeholder="Ej. Confirmación Oficial CEAC DS-160 / Schedule of Stay"
+              className={inputClass}
+            />
 
-              <div className="space-y-1.5 sm:col-span-2">
-                <label className="block text-xs font-semibold text-brand-charcoal">
-                  Título de la Sesión *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={meetingTitle}
-                  onChange={(e) => setMeetingTitle(e.target.value)}
-                  placeholder="Ej. Simulacro Consular 1-a-1 y Revisión de Arraigo"
-                  className={inputBaseClass}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-brand-charcoal">
-                Notas de la Reunión / Dictamen para el Cliente *
-              </label>
-              <textarea
-                rows={3}
-                required
-                value={meetingNotes}
-                onChange={(e) => setMeetingNotes(e.target.value)}
-                placeholder="Escribe aquí los puntos tratados, fortalezas del perfil y recomendaciones para la ventanilla consular..."
-                className="w-full rounded-xl bg-brand-platinum/50 border border-brand-charcoal/10 p-3.5 text-sm font-sans text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-brand-red/15 transition-all"
+            <label className="cursor-pointer flex items-center justify-between h-11 rounded-xl border border-dashed border-brand-red/40 bg-brand-red/[0.03] px-4 text-xs font-semibold text-brand-charcoal">
+              <span className="truncate">
+                {delivFile
+                  ? `📄 ${delivFile.name}`
+                  : "Seleccionar PDF oficial..."}
+              </span>
+              <span className="rounded bg-brand-red px-2.5 py-1 text-[10px] font-bold text-white uppercase">
+                Explorar
+              </span>
+              <input
+                type="file"
+                accept=".pdf,image/*"
+                className="hidden"
+                onChange={(e) => setDelivFile(e.target.files?.[0] || null)}
               />
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2 border-t border-brand-platinum">
-              <label className="cursor-pointer inline-flex items-center gap-2.5 rounded-xl border border-dashed border-brand-red/40 bg-brand-red/[0.02] px-4 py-2.5 text-xs font-semibold text-brand-charcoal hover:bg-brand-red/[0.06] transition-all">
-                <Paperclip className="h-4 w-4 text-brand-red" />
-                <span className="truncate max-w-xs">
-                  {meetingFile
-                    ? `📎 ${meetingFile.name}`
-                    : "Adjuntar Archivo de la Reunión (Opcional)"}
-                </span>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                  className="hidden"
-                  onChange={(e) => setMeetingFile(e.target.files?.[0] || null)}
-                />
-              </label>
-
-              <button
-                type="submit"
-                disabled={savingMeeting}
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-7 py-3 text-xs font-semibold text-brand-white shadow-md shadow-brand-red/20 hover:bg-brand-red/90 disabled:opacity-50 transition-all"
-              >
-                <Plus className="h-4 w-4" />
-                <span>
-                  {savingMeeting
-                    ? "Guardando Meeting..."
-                    : "Guardar Registro de Meeting"}
-                </span>
-              </button>
-            </div>
-          </form>
-
-          <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-4">
-            <h4 className="font-display text-base font-bold text-brand-charcoal">
-              Bitácora de Meetings ({meetingsArray.length})
-            </h4>
-
-            {meetingsArray.length === 0 ? (
-              <p className="text-xs text-brand-charcoal/50 py-4">
-                Aún no se han registrado reuniones en este caso.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {meetingsArray.map((mtg) => (
-                  <div
-                    key={mtg.id}
-                    className="rounded-2xl bg-brand-platinum/30 p-5 border border-brand-platinum space-y-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="rounded-full bg-brand-charcoal px-3 py-0.5 text-[10px] font-bold text-white">
-                          📅 {mtg.date}
-                        </span>
-                        <span className="text-xs font-bold text-brand-charcoal">
-                          {mtg.title}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-[11px] text-brand-charcoal/55">
-                          Registrado por:{" "}
-                          <strong>{formatDisplayName(mtg.advisorName)}</strong>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteMeeting(mtg.id)}
-                          className="text-brand-charcoal/40 hover:text-brand-red transition-colors"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <p className="text-xs text-brand-charcoal/75 leading-relaxed whitespace-pre-line bg-brand-white p-3.5 rounded-xl border border-brand-platinum">
-                      {mtg.notes}
-                    </p>
-
-                    {mtg.attachmentUrl && (
-                      <div className="pt-1">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPreviewDoc({
-                              title: mtg.title,
-                              fileName: mtg.attachmentName,
-                              fileUrl: mtg.attachmentUrl || "",
-                            })
-                          }
-                          className="inline-flex items-center gap-2 rounded-full bg-brand-red/10 px-4 py-1.5 text-xs font-bold text-brand-red hover:bg-brand-red hover:text-white transition-all"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                          <span>
-                            Previsualizar Attachment:{" "}
-                            {mtg.attachmentName || "Documento Adjunto"}
-                          </span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            </label>
           </div>
-        </div>
-      )}
 
-      {/* 3. TAB 5: REGISTRO DE AUDITORÍA INMUTABLE (AUDIT TRAIL POR EXPEDIENTE) */}
-      {activeWorkspaceTab === "auditoria" && (
-        <div className="rounded-3xl bg-brand-white p-6 sm:p-8 border border-brand-charcoal/10 shadow-sm space-y-5">
-          <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
-            <div className="flex items-center gap-2.5">
-              <History className="h-5 w-5 text-brand-red" />
-              <div>
-                <h3 className="font-display text-lg font-bold text-brand-charcoal">
-                  Registro de Auditoría Inmutable (Audit Trail)
-                </h3>
-                <p className="text-xs text-brand-charcoal/55">
-                  Trazabilidad cronológica de cada modificación, carga documental y cambio de estado en este expediente.
-                </p>
-              </div>
-            </div>
-            <span className="rounded-full bg-brand-charcoal px-3 py-1 text-[10px] font-bold uppercase text-white">
-              Solo Lectura • Inmutable
+          <button
+            type="submit"
+            disabled={uploadingDeliv || !delivFile}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-3 text-xs font-bold text-white hover:bg-brand-charcoal disabled:opacity-50 transition-all"
+          >
+            <UploadCloud className="h-4 w-4" />
+            <span>
+              {uploadingDeliv
+                ? "Emitiendo y notificando..."
+                : "Emitir Entregable y Notificar al Cliente"}
             </span>
+          </button>
+        </form>
+
+        <form
+          onSubmit={handleScheduleMeeting}
+          className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-4"
+        >
+          <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
+            <Calendar className="h-5 w-5 text-brand-red" />
+            <div>
+              <h3 className="font-display text-base font-bold text-brand-charcoal">
+                Programar Simulacro 1-a-1 (Google Meet)
+              </h3>
+              <p className="text-xs text-brand-charcoal/70">
+                Envía citación automática con calendario al correo y Sala
+                Consular.
+              </p>
+            </div>
           </div>
 
-          {auditLogsArray.length === 0 ? (
-            <p className="text-xs text-brand-charcoal/50 py-6 text-center">
-              Aún no hay eventos registrados en la bitácora de auditoría.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {auditLogsArray.map((log) => (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input
+              type="text"
+              required
+              value={meetTitle}
+              onChange={(e) => setMeetTitle(e.target.value)}
+              placeholder="Ej. Simulacro Consular 1-a-1"
+              className={inputClass}
+            />
+            <input
+              type="datetime-local"
+              required
+              value={meetDateTime}
+              onChange={(e) => setMeetDateTime(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+
+          <input
+            type="url"
+            value={meetUrl}
+            onChange={(e) => setMeetUrl(e.target.value)}
+            placeholder="https://meet.google.com/xxx-xxxx-xxx"
+            className={inputClass}
+          />
+
+          <button
+            type="submit"
+            disabled={savingMeet}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-charcoal px-6 py-3 text-xs font-bold text-white hover:bg-brand-red disabled:opacity-50 transition-all"
+          >
+            <Video className="h-4 w-4" />
+            <span>
+              {savingMeet
+                ? "Agendando..."
+                : "Agendar Sesión y Enviar Citación"}
+            </span>
+          </button>
+
+          {/* LISTA DE SESIONES YA AGENDADAS EN ESTE EXPEDIENTE CON DESCARGA .ICS */}
+          {Array.isArray(appData.meetings) && appData.meetings.length > 0 && (
+            <div className="pt-4 border-t border-brand-platinum space-y-2.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-brand-charcoal/60 block">
+                Sesiones Agendadas con {clientName} ({appData.meetings.length})
+              </span>
+              {appData.meetings.map((m) => (
                 <div
-                  key={log.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl bg-brand-platinum/35 p-4 border border-brand-platinum text-xs"
+                  key={m.id}
+                  className="rounded-2xl bg-brand-platinum/40 p-3.5 border border-brand-charcoal/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
                 >
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
-                          log.actorRole === "admin"
-                            ? "bg-brand-charcoal text-white"
-                            : log.actorRole === "advisor"
-                            ? "bg-brand-red text-white"
-                            : "bg-emerald-500/15 text-emerald-800"
-                        }`}
-                      >
-                        {log.actorRole}
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-brand-charcoal truncate">
+                        {m.title}
                       </span>
-                      <span className="font-bold text-brand-charcoal">
-                        {log.action}
-                      </span>
+                      {m.completed && (
+                        <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                          Completada
+                        </span>
+                      )}
                     </div>
-                    <p className="text-brand-charcoal/70">{log.details}</p>
+                    <p className="text-[11px] text-brand-charcoal/70">
+                      📅{" "}
+                      {new Date(m.dateTime).toLocaleString("es-CO", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })}{" "}
+                      • {formatDisplayName(m.advisorName)}
+                    </p>
                   </div>
 
-                  <div className="text-right shrink-0 text-[11px] text-brand-charcoal/55">
-                    <p className="font-semibold text-brand-charcoal">
-                      {log.actorName}
-                    </p>
-                    <p>
-                      {new Date(log.timestamp).toLocaleString("es-CO", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
-                    </p>
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => downloadMeetingIcs(m, clientName)}
+                      title="Descargar evento .ics para Apple Calendar / Outlook"
+                      className="inline-flex items-center gap-1 rounded-lg border border-brand-charcoal/15 bg-white hover:bg-brand-charcoal hover:text-white px-2.5 py-1.5 text-[11px] font-bold text-brand-charcoal transition-colors"
+                    >
+                      <CalendarPlus className="h-3 w-3 text-brand-red" />
+                      <span>.ics</span>
+                    </button>
+
+                    {m.meetUrl && (
+                      <a
+                        href={m.meetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-lg bg-brand-charcoal hover:bg-brand-red px-2.5 py-1.5 text-[11px] font-bold text-white transition-colors"
+                      >
+                        <Video className="h-3 w-3" />
+                        <span>Meet</span>
+                      </a>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => handleToggleMeetingCompleted(m.id)}
+                      className="rounded-lg border border-brand-charcoal/15 bg-white hover:bg-emerald-600 hover:text-white px-2.5 py-1.5 text-[11px] font-bold text-brand-charcoal transition-colors"
+                    >
+                      {m.completed ? "Reabrir" : "✓ Completar"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteMeeting(m.id)}
+                      className="rounded-lg p-1.5 text-brand-charcoal/50 hover:text-brand-red transition-colors"
+                      title="Cancelar / Eliminar sesión"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
               ))}
             </div>
           )}
+        </form>
+      </div>
+
+      {/* BITÁCORA DE AUDITORÍA Y TRAZABILIDAD DEL EXPEDIENTE */}
+      <section className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-5">
+        <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-charcoal text-white">
+              <History className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-display text-lg font-bold text-brand-charcoal">
+                Bitácora de Auditoría del Expediente ({caseAuditLogs.length}{" "}
+                eventos)
+              </h3>
+              <p className="text-xs text-brand-charcoal/70">
+                Historial cronológico inmutable de todas las acciones sobre este
+                caso.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {caseAuditLogs.length === 0 ? (
+          <p className="text-xs text-brand-charcoal/60 py-6 text-center">
+            Aún no hay eventos registrados en la bitácora de este expediente.
+          </p>
+        ) : (
+          <div className="divide-y divide-brand-platinum max-h-96 overflow-y-auto pr-1">
+            {caseAuditLogs.map((log) => (
+              <div
+                key={log.id}
+                className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+              >
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-brand-charcoal">
+                      {log.action}
+                    </span>
+                    <span className="rounded bg-brand-platinum px-2 py-0.5 font-mono text-[10px] font-bold uppercase text-brand-charcoal">
+                      {log.actorName} ({log.actorRole})
+                    </span>
+                  </div>
+                  <p className="text-brand-charcoal/70">{log.details}</p>
+                </div>
+                <span className="font-mono text-[11px] text-brand-charcoal/55 shrink-0">
+                  {new Date(log.timestamp).toLocaleString("es-CO", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* VISUALIZADOR INTERNO DE DOCUMENTOS DEL CASO (SE CIERRA CON ESC) */}
+      {previewVaultDoc && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 sm:p-8"
+          onClick={() => setPreviewVaultDoc(null)}
+        >
+          <div
+            className="w-full max-w-5xl rounded-3xl bg-brand-white border border-brand-charcoal/20 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 bg-brand-charcoal text-white">
+              <div className="min-w-0 pr-4">
+                <span className="font-mono text-[10px] font-bold uppercase text-brand-red block">
+                  AUDITORÍA BÓVEDA PII • PRESIONA ESC PARA CERRAR
+                </span>
+                <h3 className="font-display text-base font-bold truncate">
+                  {previewVaultDoc.title} — {previewVaultDoc.fileName}
+                </h3>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                {previewVaultDoc.fileUrl && (
+                  <a
+                    href={previewVaultDoc.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white/10 hover:bg-brand-red px-4 py-1.5 text-xs font-bold text-white transition-colors"
+                  >
+                    <span>Abrir en Pestaña Nueva</span>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPreviewVaultDoc(null)}
+                  className="rounded-xl bg-white/10 hover:bg-brand-red p-2 text-white transition-colors"
+                  aria-label="Cerrar visualizador (Esc)"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 bg-brand-platinum overflow-auto min-h-[72vh] flex items-center justify-center">
+              <iframe
+                src={previewVaultDoc.fileUrl}
+                title={previewVaultDoc.title}
+                className="w-full h-[78vh] border-0 bg-white"
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-export default function CaseWorkspacePage() {
+export default function AdminCaseWorkspacePage() {
   return (
     <DashboardLayout>
-      <Suspense
-        fallback={
-          <div className="py-20 text-center text-xs text-brand-charcoal/50">
-            Cargando Workspace del Caso...
-          </div>
-        }
-      >
-        <CaseWorkspaceContent />
+      <Suspense fallback={<DashboardContentSkeleton />}>
+        <AdminCaseWorkspaceContent />
       </Suspense>
     </DashboardLayout>
   );

@@ -7,6 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { getWhatsAppUrl } from "@/lib/constants";
 import ConsularGlobe from "@/components/landing/ConsularGlobe";
 import { BrandLogo } from "@/components/ui/BrandLogo";
+import { DestinationCountry } from "@/types/visa";
 import {
   CheckCircle2,
   ArrowRight,
@@ -25,6 +26,139 @@ const NAV_ITEMS = [
   { id: "planes", label: "Planes y Tarifas" },
   { id: "faq", label: "Preguntas Frecuentes" },
 ];
+
+const PLANS_BY_COUNTRY: Record<
+  DestinationCountry,
+  {
+    countryLabel: string;
+    subtitle: string;
+    plans: {
+      name: string;
+      tagline: string;
+      price: string;
+      description: string;
+      highlighted?: boolean;
+      badge?: string;
+      features: string[];
+      whatsappMsg: string;
+    }[];
+  }
+> = {
+  USA: {
+    countryLabel: "Estados Unidos (Visa B1/B2)",
+    subtitle:
+      "Proceso ante el Departamento de Estado (CEAC), programación de citas CAS + Embajada y preparación frente al Oficial Consular bajo la Sección 214(b).",
+    plans: [
+      {
+        name: "Essential USA",
+        tagline: "Renovación o Solicitud Estándar B1/B2",
+        price: "$190",
+        description:
+          "Ideal para solicitantes con historial de viajes previo o renovaciones de visa americana sin entrevista.",
+        features: [
+          "Acceso completo al Portal de Cliente 24/7",
+          "Formulario Inteligente DS-160 en español auditado en inglés técnico",
+          "Revisión legal de pasaporte y soportes en Bóveda Criptográfica",
+          "Emisión de hoja oficial de Confirmación CEAC DS-160",
+          "Programación de citas oficiales en CAS y Embajada de EE. UU.",
+        ],
+        whatsappMsg:
+          "Hola Global Visa Consulting, quiero contratar el Plan Essential para Estados Unidos ($190 USD).",
+      },
+      {
+        name: "Priority Pro USA",
+        tagline: "Estrategia de Arraigo 214(b) + Simulacro 1-a-1",
+        price: "$290",
+        highlighted: true,
+        badge: "Más Elegido",
+        description:
+          "Diseñado para primeras solicitudes de visa B1/B2 que buscan máxima solidez probatoria y entrenamiento real frente al cónsul.",
+        features: [
+          "Todo lo incluido en el Plan Essential USA",
+          "Estructuración jurídica de perfil de arraigo laboral y familiar",
+          "Acceso completo a la Sala de Entrenamiento Consular",
+          "1 Simulacro de entrevista consular 1-a-1 en vivo (Google Meet)",
+          "Monitoreo prioritario de adelanto de cita consular en el sistema",
+        ],
+        whatsappMsg:
+          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro para Estados Unidos ($290 USD).",
+      },
+      {
+        name: "VIP Concierge USA",
+        tagline: "Ejecutivos, Familias o Rechazos Previos 214(b)",
+        price: "$450",
+        description:
+          "Acompañamiento jurídico intensivo con reconstrucción de perfil tras negaciones previas o gestión integral de grupo familiar.",
+        features: [
+          "Todo lo incluido en el Plan Priority Pro USA",
+          "Auditoría forense de rechazos previos bajo Sección 214(b)",
+          "Doble sesión de simulacro consular con Senior Legal Advisor",
+          "Redacción técnica de cartas de patrocinio o invitación ejecutiva",
+          "Línea directa preferencial con tu especialista por WhatsApp",
+        ],
+        whatsappMsg:
+          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge para Estados Unidos ($450 USD).",
+      },
+    ],
+  },
+  JAPAN: {
+    countryLabel: "Japón (Visa MOFA Estancia Corta)",
+    subtitle:
+      "La Embajada del Japón no realiza entrevista verbal estándar; la aprobación depende 100% de la exactitud milimétrica de tu carpeta física, solvencia bancaria y Schedule of Stay.",
+    plans: [
+      {
+        name: "Essential Japón",
+        tagline: "Turismo Individual con Solvencia Propia",
+        price: "$150",
+        description:
+          "Para viajeros con ingresos y extractos bancarios propios que requieren estructuración oficial de su expediente japonés.",
+        features: [
+          "Acceso completo al Portal de Cliente y Bóveda Documental 24/7",
+          "Diligenciamiento oficial del Formulario de Solicitud de Visa MOFA",
+          "Elaboración técnica del Schedule of Stay (Itinerario día por día)",
+          "Verificación de reservas de vuelos y hoteles según norma consular",
+          "Instructivo exacto de armado de carpeta física para radicación",
+        ],
+        whatsappMsg:
+          "Hola Global Visa Consulting, quiero contratar el Plan Essential para Japón ($150 USD).",
+      },
+      {
+        name: "Priority Pro Japón",
+        tagline: "Auditoría Financiera + Carpeta Consular Llave en Mano",
+        price: "$240",
+        highlighted: true,
+        badge: "Recomendado Japón",
+        description:
+          "Blindaje documental completo con auditoría de extractos bancarios de los últimos 3 meses y sesión 1-a-1 de revisión pre-radicación.",
+        features: [
+          "Todo lo incluido en el Plan Essential Japón",
+          "Auditoría milimétrica de extractos bancarios, saldos y movimientos",
+          "Diseño personalizado de ruta lógica en Schedule of Stay (Tokio/Kioto/Osaka)",
+          "1 Sesión 1-a-1 en vivo (Google Meet) de revisión final de carpeta física",
+          "Emisión de entregables oficiales listos para imprimir en tu portal",
+        ],
+        whatsappMsg:
+          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro para Japón ($240 USD).",
+      },
+      {
+        name: "VIP Concierge Japón",
+        tagline: "Grupos Familiares, Con Garante o Perfil Independiente",
+        price: "$380",
+        description:
+          "Especial para solicitudes con patrocinador económico (carta de garantía), trabajadores independientes o grupos familiares.",
+        features: [
+          "Todo lo incluido en el Plan Priority Pro Japón",
+          "Estructuración jurídica de Carta de Garantía (Guarantor) y parentesco",
+          "Conciliación contable de ingresos para independientes o empresarios",
+          "Doble auditoría documental con Senior Advisor especializado en MOFA",
+          "Soporte directo preferencial por WhatsApp hasta la entrega del visado",
+        ],
+        whatsappMsg:
+          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge para Japón ($380 USD).",
+      },
+    ],
+  },
+};
 
 const FAQ_LIST = [
   {
@@ -50,13 +184,23 @@ const FAQ_LIST = [
 ];
 
 export default function LandingPage() {
-  const { user, profile } = useAuth();
+  const { user, profile, loading, isTwoFactorVerified } = useAuth();
 
   const [activeSection, setActiveSection] = useState<string>("");
+  const [isScrolled, setIsScrolled] = useState(false);
   const [scrolledPastHero, setScrolledPastHero] = useState(false);
-  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
 
-  const portalHref = user
+  // Selector de país con estado de transición animada para las tarjetas
+  const [selectedPlanCountry, setSelectedPlanCountry] =
+    useState<DestinationCountry>("USA");
+  const [isSwitchingCountry, setIsSwitchingCountry] = useState(false);
+
+  // FAQs inician todas cerradas (null) hasta que el usuario haga clic
+  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
+
+  const isFullyAuthenticated = Boolean(user && isTwoFactorVerified);
+
+  const portalHref = isFullyAuthenticated
     ? profile?.role === "admin" || profile?.role === "advisor"
       ? "/dashboard/admin?tab=gobernanza"
       : "/dashboard"
@@ -65,7 +209,8 @@ export default function LandingPage() {
   useEffect(() => {
     const handleScrollSpy = () => {
       const y = window.scrollY;
-      setScrolledPastHero(y > 520);
+      setIsScrolled(y > 35);
+      setScrolledPastHero(y > 320);
 
       if (y < 380) {
         setActiveSection("");
@@ -91,6 +236,15 @@ export default function LandingPage() {
     return () => window.removeEventListener("scroll", handleScrollSpy);
   }, []);
 
+  const handleSelectCountryWithAnimation = (country: DestinationCountry) => {
+    if (country === selectedPlanCountry) return;
+    setIsSwitchingCountry(true);
+    setTimeout(() => {
+      setSelectedPlanCountry(country);
+      setIsSwitchingCountry(false);
+    }, 160);
+  };
+
   const handleScrollToTop = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -101,23 +255,33 @@ export default function LandingPage() {
     e.currentTarget.blur();
   };
 
+  const activeCountryPricing = PLANS_BY_COUNTRY[selectedPlanCountry];
+
   return (
     <div
       id="top"
       className="min-h-screen bg-brand-white text-brand-charcoal font-sans relative selection:bg-brand-red selection:text-white"
     >
-      {/* GLOBO 3D SIN RECORTES */}
+      {/* GLOBO 3D DINÁMICO: Más grande y centrado en el Hero, regresa al tamaño y posición actual al bajar */}
       <div
         aria-hidden="true"
-        className={`hidden lg:flex items-center justify-center pointer-events-none fixed top-20 right-[3%] w-[540px] h-[540px] z-0 transition-opacity duration-500 ${
-          scrolledPastHero ? "opacity-20" : "opacity-100"
+        className={`hidden lg:flex items-center justify-center pointer-events-none fixed w-[640px] h-[640px] z-0 transition-all duration-700 ease-out ${
+          scrolledPastHero
+            ? "top-24 right-[1%] opacity-20 scale-90"
+            : "top-12 right-[4%] opacity-100 scale-100"
         }`}
       >
         <ConsularGlobe />
       </div>
 
-      {/* NAVBAR STICKY 100% SÓLIDO CON LOGO OFICIAL Y SCROLL-SPY */}
-      <header className="sticky top-0 z-40 bg-brand-white border-b border-brand-charcoal/10 px-4 sm:px-8 py-3.5">
+      {/* NAVBAR INTELIGENTE: Sólida en el tope, traslúcida al bajar y 100% visible al hacer hover */}
+      <header
+        className={`sticky top-0 z-40 px-4 sm:px-8 py-3.5 transition-all duration-300 border-b ${
+          isScrolled
+            ? "bg-brand-white/65 backdrop-blur-md opacity-85 border-brand-charcoal/5 hover:bg-brand-white hover:opacity-100 hover:border-brand-charcoal/15 hover:shadow-md"
+            : "bg-brand-white opacity-100 border-brand-charcoal/10"
+        }`}
+      >
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           <a
             href="#top"
@@ -130,7 +294,7 @@ export default function LandingPage() {
 
           <nav
             aria-label="Navegación principal"
-            className="hidden md:flex items-center gap-1.5 rounded-full bg-brand-platinum p-1.5 border border-brand-charcoal/10"
+            className="hidden md:flex items-center gap-1.5 rounded-full bg-brand-platinum/90 p-1.5 border border-brand-charcoal/10"
           >
             {NAV_ITEMS.map((item) => {
               const isActive = activeSection === item.id;
@@ -139,10 +303,10 @@ export default function LandingPage() {
                   key={item.id}
                   href={`#${item.id}`}
                   onClick={() => setActiveSection(item.id)}
-                  className={`rounded-full px-4 py-2 text-xs font-bold transition-all focus:outline-none ${
+                  className={`rounded-full px-4 py-2 text-xs font-bold transition-all duration-200 focus:outline-none ${
                     isActive
                       ? "bg-brand-charcoal text-brand-white shadow-xs"
-                      : "text-brand-charcoal/75 hover:text-brand-charcoal hover:bg-brand-white/60"
+                      : "text-brand-charcoal/75 hover:text-brand-charcoal hover:bg-brand-white/70"
                   }`}
                 >
                   {item.label}
@@ -154,10 +318,14 @@ export default function LandingPage() {
           <div className="flex items-center gap-3">
             <Link
               href={portalHref}
-              className="inline-flex items-center gap-1.5 rounded-full border border-brand-charcoal/15 bg-brand-platinum/60 hover:bg-brand-charcoal hover:text-white px-4 py-2.5 text-xs font-bold text-brand-charcoal transition-all"
+              className="inline-flex items-center justify-center gap-1.5 rounded-full border border-brand-charcoal/15 bg-brand-platinum/70 hover:bg-brand-charcoal hover:text-white px-4 py-2.5 text-xs font-bold text-brand-charcoal transition-all min-w-[132px]"
             >
-              <Lock className="h-3.5 w-3.5 text-brand-red" />
-              <span>{user ? "Ir a mi Portal" : "Portal Clientes"}</span>
+              <Lock className="h-3.5 w-3.5 text-brand-red shrink-0" />
+              {loading ? (
+                <span className="h-3.5 w-20 rounded-full bg-brand-charcoal/15 animate-skeleton" />
+              ) : (
+                <span>{user ? "Ir a mi Portal" : "Portal Clientes"}</span>
+              )}
             </Link>
 
             <a
@@ -198,7 +366,8 @@ export default function LandingPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1 max-w-xl">
                 <a
-                  href="#jurisdicciones"
+                  href="#planes"
+                  onClick={() => handleSelectCountryWithAnimation("USA")}
                   className="group flex items-center justify-between rounded-2xl bg-brand-platinum/70 hover:bg-brand-charcoal border border-brand-charcoal/10 p-4 transition-all"
                 >
                   <div className="flex items-center gap-3">
@@ -218,7 +387,8 @@ export default function LandingPage() {
                 </a>
 
                 <a
-                  href="#jurisdicciones"
+                  href="#planes"
+                  onClick={() => handleSelectCountryWithAnimation("JAPAN")}
                   className="group flex items-center justify-between rounded-2xl bg-brand-platinum/70 hover:bg-brand-charcoal border border-brand-charcoal/10 p-4 transition-all"
                 >
                   <div className="flex items-center gap-3">
@@ -253,11 +423,15 @@ export default function LandingPage() {
 
                 <Link
                   href={portalHref}
-                  className="inline-flex items-center gap-2 rounded-full border-2 border-brand-charcoal/15 bg-brand-white px-7 py-4 text-xs sm:text-sm font-bold text-brand-charcoal hover:border-brand-charcoal transition-all"
+                  className="inline-flex items-center justify-center gap-2 rounded-full border-2 border-brand-charcoal/15 bg-brand-white px-7 py-4 text-xs sm:text-sm font-bold text-brand-charcoal hover:border-brand-charcoal transition-all min-w-[175px]"
                 >
-                  <span>
-                    {user ? "Abrir mi Expediente" : "Conocer el Portal"}
-                  </span>
+                  {loading ? (
+                    <span className="h-4 w-28 rounded-full bg-brand-charcoal/15 animate-skeleton" />
+                  ) : (
+                    <span>
+                      {user ? "Abrir mi Expediente" : "Conocer el Portal"}
+                    </span>
+                  )}
                 </Link>
               </div>
 
@@ -300,8 +474,8 @@ export default function LandingPage() {
             </div>
             <p className="text-xs sm:text-sm text-brand-charcoal/75 max-w-md leading-relaxed">
               Cada embajada evalúa criterios distintos. Nuestro sistema adapta
-              automáticamente tu cuestionario, tu bóveda documental y tus
-              entregables según el consulado de destino.
+              automáticamente tu formulario inteligente, tu bóveda documental y
+              tus entregables según el consulado de destino.
             </p>
           </div>
 
@@ -364,14 +538,11 @@ export default function LandingPage() {
                   B1 (Negocios) • B2 (Turismo / Tratamiento Médico)
                 </span>
                 <a
-                  href={getWhatsAppUrl(
-                    "Hola Global Visa Consulting, me interesa tramitar mi Visa B1/B2 para Estados Unidos."
-                  )}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href="#planes"
+                  onClick={() => handleSelectCountryWithAnimation("USA")}
                   className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-red hover:underline"
                 >
-                  <span>Solicitar Visa EE. UU.</span>
+                  <span>Ver Planes EE. UU.</span>
                   <ArrowRight className="h-3.5 w-3.5" />
                 </a>
               </div>
@@ -435,14 +606,11 @@ export default function LandingPage() {
                   Turismo • Visita Familiar • Tránsito
                 </span>
                 <a
-                  href={getWhatsAppUrl(
-                    "Hola Global Visa Consulting, me interesa tramitar mi Visa para Japón."
-                  )}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href="#planes"
+                  onClick={() => handleSelectCountryWithAnimation("JAPAN")}
                   className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-red hover:underline"
                 >
-                  <span>Solicitar Visa Japón</span>
+                  <span>Ver Planes Japón</span>
                   <ArrowRight className="h-3.5 w-3.5" />
                 </a>
               </div>
@@ -482,8 +650,8 @@ export default function LandingPage() {
               },
               {
                 step: "ETAPA 02",
-                title: "Cuestionario Estratégico",
-                desc: "Respondes en 5 minutos y en español solo las preguntas estratégicas de viaje y arraigo que no aparecen en tus certificados.",
+                title: "Formulario Inteligente",
+                desc: "Respondes en 5 minutos y en español solo las preguntas estratégicas de viaje y arraigo que se adaptan a tu país de destino.",
                 icon: FileText,
                 badge: "50% Avance",
               },
@@ -497,7 +665,7 @@ export default function LandingPage() {
               {
                 step: "ETAPA 04",
                 title: "Sala Consular & Entregables",
-                desc: "Descargas tu Confirmación DS-160 o carpeta japonesa directamente desde tu perfil y realizas tu simulacro 1-a-1 por Google Meet.",
+                desc: "Descargas tu Confirmación DS-160 o carpeta japonesa directamente desde tu perfil y realizas tu preparación 1-a-1 por Google Meet.",
                 icon: Award,
                 badge: "100% Listo",
               },
@@ -539,196 +707,225 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* SECCIÓN 4: PLANES Y TARIFAS */}
+        {/* SECCIÓN 4: PLANES Y TARIFAS CON SELECTOR DESLIZANTE ANIMADO */}
         <section
           id="planes"
-          className="scroll-mt-20 max-w-7xl mx-auto px-4 sm:px-8 py-20 border-t border-brand-charcoal/10 space-y-12"
+          className="scroll-mt-20 max-w-7xl mx-auto px-4 sm:px-8 py-20 border-t border-brand-charcoal/10 space-y-10"
         >
-          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+          <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
             <div className="space-y-2 max-w-2xl">
               <span className="text-xs font-bold uppercase tracking-widest text-brand-red">
-                Honorarios Transparentes
+                Honorarios Transparentes por Jurisdicción
               </span>
               <h2 className="font-display text-3xl sm:text-4xl font-extrabold text-brand-charcoal">
                 Inversión clara desde el primer día.
               </h2>
+              <p
+                className={`text-xs sm:text-sm text-brand-charcoal/75 leading-relaxed pt-1 transition-all duration-300 ${
+                  isSwitchingCountry
+                    ? "opacity-0 translate-y-1"
+                    : "opacity-100 translate-y-0"
+                }`}
+              >
+                {activeCountryPricing.subtitle}
+              </p>
             </div>
-            <p className="text-xs sm:text-sm text-brand-charcoal/75 max-w-md leading-relaxed">
-              Sin cobros sorpresa ni letras pequeñas. Elige el nivel de
-              acompañamiento jurídico que mejor se adapte a tu perfil
-              migratorio.
-            </p>
+
+            {/* Selector de País con Píldora Deslizante Animada (Sliding Pill) */}
+            <div className="flex flex-col sm:items-end gap-2 shrink-0">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-brand-charcoal/65">
+                Selecciona el país de tu trámite:
+              </span>
+              <div
+                role="tablist"
+                aria-label="Seleccionar país de destino para ver planes"
+                className="relative grid grid-cols-2 rounded-2xl bg-brand-platinum p-1.5 border border-brand-charcoal/15 w-full sm:w-[390px] select-none overflow-hidden"
+              >
+                {/* Píldora deslizante de fondo */}
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute top-1.5 bottom-1.5 left-1.5 w-[calc(50%-6px)] rounded-xl bg-brand-charcoal shadow-md transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                    selectedPlanCountry === "JAPAN"
+                      ? "translate-x-full"
+                      : "translate-x-0"
+                  }`}
+                />
+
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedPlanCountry === "USA"}
+                  onClick={() => handleSelectCountryWithAnimation("USA")}
+                  className={`relative z-10 flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition-colors duration-300 focus:outline-none ${
+                    selectedPlanCountry === "USA"
+                      ? "text-white"
+                      : "text-brand-charcoal/75 hover:text-brand-charcoal"
+                  }`}
+                >
+                  <span
+                    className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-extrabold transition-transform duration-300 ${
+                      selectedPlanCountry === "USA"
+                        ? "bg-brand-red text-white scale-105"
+                        : "bg-brand-charcoal/15 text-brand-charcoal"
+                    }`}
+                  >
+                    US
+                  </span>
+                  <span>Estados Unidos (B1/B2)</span>
+                </button>
+
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedPlanCountry === "JAPAN"}
+                  onClick={() => handleSelectCountryWithAnimation("JAPAN")}
+                  className={`relative z-10 flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition-colors duration-300 focus:outline-none ${
+                    selectedPlanCountry === "JAPAN"
+                      ? "text-white"
+                      : "text-brand-charcoal/75 hover:text-brand-charcoal"
+                  }`}
+                >
+                  <span
+                    className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-extrabold transition-transform duration-300 ${
+                      selectedPlanCountry === "JAPAN"
+                        ? "bg-brand-red text-white scale-105"
+                        : "bg-brand-charcoal/15 text-brand-charcoal"
+                    }`}
+                  >
+                    JP
+                  </span>
+                  <span>Japón (MOFA)</span>
+                </button>
+              </div>
+            </div>
           </div>
 
+          {/* Grilla de Planes con Animación Fluida y Stagger al cambiar de país */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-stretch">
-            <div className="rounded-3xl bg-brand-white border-2 border-brand-charcoal/15 p-8 flex flex-col justify-between space-y-6 shadow-sm">
-              <div className="space-y-4">
-                <div>
-                  <h3 className="font-display text-xl font-bold text-brand-charcoal">
-                    Essential
-                  </h3>
-                  <p className="text-xs text-brand-charcoal/70">
-                    Solicitud Individual Estándar
-                  </p>
-                </div>
+            {activeCountryPricing.plans.map((plan, index) => {
+              const staggerDelay =
+                index === 0
+                  ? "delay-0"
+                  : index === 1
+                  ? "delay-75"
+                  : "delay-150";
+              const transitionStateClass = isSwitchingCountry
+                ? "opacity-0 translate-y-3 scale-[0.98]"
+                : `opacity-100 translate-y-0 scale-100 ${staggerDelay}`;
 
-                <div className="flex items-baseline gap-1">
-                  <span className="font-display text-4xl font-extrabold text-brand-charcoal">
-                    $190
-                  </span>
-                  <span className="text-xs font-bold text-brand-charcoal/70">
-                    USD
-                  </span>
-                </div>
+              if (plan.highlighted) {
+                return (
+                  <div
+                    key={plan.name}
+                    className={`rounded-3xl bg-brand-charcoal text-brand-white border-2 border-brand-red p-8 flex flex-col justify-between space-y-6 shadow-xl relative transition-all duration-300 ease-out ${transitionStateClass}`}
+                  >
+                    <div className="space-y-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h3 className="font-display text-xl font-bold text-white">
+                            {plan.name}
+                          </h3>
+                          <p className="text-xs text-white/70 mt-0.5">
+                            {plan.tagline}
+                          </p>
+                        </div>
+                        {plan.badge && (
+                          <span className="rounded-full bg-brand-red px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white shrink-0">
+                            {plan.badge}
+                          </span>
+                        )}
+                      </div>
 
-                <p className="text-xs text-brand-charcoal/75 leading-relaxed">
-                  Ideal para perfiles con historial de viajes previo o
-                  renovaciones sin complicaciones.
-                </p>
+                      <div className="flex items-baseline gap-1">
+                        <span className="font-display text-4xl font-extrabold text-white">
+                          {plan.price}
+                        </span>
+                        <span className="text-xs font-bold text-white/70">
+                          USD
+                        </span>
+                      </div>
 
-                <ul className="space-y-2.5 pt-2 text-xs text-brand-charcoal/85">
-                  {[
-                    "Acceso completo al Portal de Cliente 24/7",
-                    "Cuestionario inteligente DS-160 / Japón en español",
-                    "Auditoría legal de respuestas y soportes en Bóveda",
-                    "Emisión de Confirmación DS-160 o Schedule of Stay",
-                    "Programación de cita consular oficial",
-                  ].map((f) => (
-                    <li key={f} className="flex items-start gap-2.5">
-                      <CheckCircle2 className="h-4 w-4 text-brand-red shrink-0 mt-0.5" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+                      <p className="text-xs text-white/80 leading-relaxed">
+                        {plan.description}
+                      </p>
 
-              <a
-                href={getWhatsAppUrl(
-                  "Hola Global Visa Consulting, quiero contratar el Plan Essential ($190 USD)."
-                )}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full inline-flex items-center justify-center gap-2 rounded-full border-2 border-brand-charcoal bg-brand-white px-6 py-3.5 text-xs font-bold text-brand-charcoal hover:bg-brand-charcoal hover:text-white transition-all"
-              >
-                <span>Elegir Essential</span>
-                <ArrowUpRight className="h-4 w-4" />
-              </a>
-            </div>
+                      <ul className="space-y-2.5 pt-2 text-xs text-white/90">
+                        {plan.features.map((f) => (
+                          <li key={f} className="flex items-start gap-2.5">
+                            <CheckCircle2 className="h-4 w-4 text-brand-red shrink-0 mt-0.5" />
+                            <span>{f}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
 
-            <div className="rounded-3xl bg-brand-charcoal text-brand-white border-2 border-brand-red p-8 flex flex-col justify-between space-y-6 shadow-xl relative">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-display text-xl font-bold text-white">
-                      Priority Pro
-                    </h3>
-                    <p className="text-xs text-white/70">
-                      Estrategia de Arraigo + Simulacro Consular
-                    </p>
+                    <a
+                      href={getWhatsAppUrl(plan.whatsappMsg)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs font-bold text-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all"
+                    >
+                      <span>Elegir {plan.name}</span>
+                      <ArrowUpRight className="h-4 w-4" />
+                    </a>
                   </div>
-                  <span className="rounded-full bg-brand-red px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white">
-                    Más Elegido
-                  </span>
+                );
+              }
+
+              return (
+                <div
+                  key={plan.name}
+                  className={`rounded-3xl bg-brand-white border-2 border-brand-charcoal/15 p-8 flex flex-col justify-between space-y-6 shadow-sm transition-all duration-300 ease-out ${transitionStateClass}`}
+                >
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-display text-xl font-bold text-brand-charcoal">
+                        {plan.name}
+                      </h3>
+                      <p className="text-xs text-brand-charcoal/70 mt-0.5">
+                        {plan.tagline}
+                      </p>
+                    </div>
+
+                    <div className="flex items-baseline gap-1">
+                      <span className="font-display text-4xl font-extrabold text-brand-charcoal">
+                        {plan.price}
+                      </span>
+                      <span className="text-xs font-bold text-brand-charcoal/70">
+                        USD
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-brand-charcoal/75 leading-relaxed">
+                      {plan.description}
+                    </p>
+
+                    <ul className="space-y-2.5 pt-2 text-xs text-brand-charcoal/85">
+                      {plan.features.map((f) => (
+                        <li key={f} className="flex items-start gap-2.5">
+                          <CheckCircle2 className="h-4 w-4 text-brand-red shrink-0 mt-0.5" />
+                          <span>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <a
+                    href={getWhatsAppUrl(plan.whatsappMsg)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-full border-2 border-brand-charcoal bg-brand-white px-6 py-3.5 text-xs font-bold text-brand-charcoal hover:bg-brand-charcoal hover:text-white transition-all"
+                  >
+                    <span>Elegir {plan.name}</span>
+                    <ArrowUpRight className="h-4 w-4" />
+                  </a>
                 </div>
-
-                <div className="flex items-baseline gap-1">
-                  <span className="font-display text-4xl font-extrabold text-white">
-                    $290
-                  </span>
-                  <span className="text-xs font-bold text-white/70">USD</span>
-                </div>
-
-                <p className="text-xs text-white/80 leading-relaxed">
-                  Diseñado para primeras solicitudes que buscan máxima solidez
-                  probatoria y preparación frente al cónsul.
-                </p>
-
-                <ul className="space-y-2.5 pt-2 text-xs text-white/90">
-                  {[
-                    "Todo lo incluido en el Plan Essential",
-                    "Estrategia de arraigo personalizada por especialista",
-                    "Acceso completo a la Sala de Entrenamiento Consular",
-                    "1 Simulacro de entrevista 1-a-1 en vivo (Google Meet)",
-                    "Monitoreo prioritario de adelanto de cita consular",
-                  ].map((f) => (
-                    <li key={f} className="flex items-start gap-2.5">
-                      <CheckCircle2 className="h-4 w-4 text-brand-red shrink-0 mt-0.5" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <a
-                href={getWhatsAppUrl(
-                  "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro ($290 USD)."
-                )}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs font-bold text-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all"
-              >
-                <span>Elegir Priority Pro</span>
-                <ArrowUpRight className="h-4 w-4" />
-              </a>
-            </div>
-
-            <div className="rounded-3xl bg-brand-white border-2 border-brand-charcoal/15 p-8 flex flex-col justify-between space-y-6 shadow-sm">
-              <div className="space-y-4">
-                <div>
-                  <h3 className="font-display text-xl font-bold text-brand-charcoal">
-                    VIP Concierge
-                  </h3>
-                  <p className="text-xs text-brand-charcoal/70">
-                    Ejecutivos, Familias o Casos con Rechazo Previo
-                  </p>
-                </div>
-
-                <div className="flex items-baseline gap-1">
-                  <span className="font-display text-4xl font-extrabold text-brand-charcoal">
-                    $450
-                  </span>
-                  <span className="text-xs font-bold text-brand-charcoal/70">
-                    USD
-                  </span>
-                </div>
-
-                <p className="text-xs text-brand-charcoal/75 leading-relaxed">
-                  Acompañamiento intensivo con reconstrucción de perfil
-                  migratorio o gestión integral de grupo familiar.
-                </p>
-
-                <ul className="space-y-2.5 pt-2 text-xs text-brand-charcoal/85">
-                  {[
-                    "Todo lo incluido en el Plan Priority Pro",
-                    "Auditoría profunda de rechazos previos (214b)",
-                    "Doble sesión de simulacro consular con Senior Advisor",
-                    "Estructuración de cartas de patrocinio o garantía",
-                    "Soporte directo preferencial por WhatsApp",
-                  ].map((f) => (
-                    <li key={f} className="flex items-start gap-2.5">
-                      <CheckCircle2 className="h-4 w-4 text-brand-red shrink-0 mt-0.5" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <a
-                href={getWhatsAppUrl(
-                  "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge ($450 USD)."
-                )}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full inline-flex items-center justify-center gap-2 rounded-full border-2 border-brand-charcoal bg-brand-white px-6 py-3.5 text-xs font-bold text-brand-charcoal hover:bg-brand-charcoal hover:text-white transition-all"
-              >
-                <span>Elegir VIP Concierge</span>
-                <ArrowUpRight className="h-4 w-4" />
-              </a>
-            </div>
+              );
+            })}
           </div>
         </section>
 
-        {/* SECCIÓN 5: PREGUNTAS FRECUENTES (ACORDEÓN DESPLEGABLE INTERACTIVO) */}
+        {/* SECCIÓN 5: PREGUNTAS FRECUENTES (TODAS CERRADAS AL INICIO) */}
         <section
           id="faq"
           className="scroll-mt-20 max-w-4xl mx-auto px-4 sm:px-8 py-20 border-t border-brand-charcoal/10 space-y-10"

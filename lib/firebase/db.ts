@@ -1,5 +1,5 @@
 // lib/firebase/db.ts
-import { db } from "./config";
+import { auth, db } from "./config";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import {
   AppNotification,
@@ -7,6 +7,7 @@ import {
   AuditLogEntry,
   DestinationCountry,
   PlanTier,
+  ScheduledMeetingItem,
   SystemLogCategory,
   SystemLogEntry,
   SystemLogOutcome,
@@ -26,10 +27,6 @@ export function formatDisplayName(rawName?: string | null): string {
     .join(" ");
 }
 
-/**
- * Normaliza cualquier campo de Firestore que pueda venir como Array o como Objeto/Mapa
- * evitando errores `x.filter is not a function` o `x.some is not a function`.
- */
 function normalizeToArray<T = any>(rawField: unknown): T[] {
   if (!rawField) return [];
   if (Array.isArray(rawField)) return rawField;
@@ -39,6 +36,110 @@ function normalizeToArray<T = any>(rawField: unknown): T[] {
     );
   }
   return [];
+}
+
+function toIcsUtcTimestamp(date: Date): string {
+  return date
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
+}
+
+export function getGoogleCalendarUrl(
+  meeting: ScheduledMeetingItem,
+  clientName?: string
+): string {
+  const start = new Date(meeting.dateTime);
+  const safeStart = isNaN(start.getTime()) ? new Date() : start;
+  const end = new Date(safeStart.getTime() + 45 * 60 * 1000);
+
+  const datesParam = `${toIcsUtcTimestamp(safeStart)}/${toIcsUtcTimestamp(end)}`;
+  const title = `${meeting.title} — Global Visa Consulting`;
+  const details = [
+    `Sesión Consular 1-a-1 con ${formatDisplayName(meeting.advisorName)}`,
+    clientName ? `Titular: ${formatDisplayName(clientName)}` : "",
+    meeting.meetUrl ? `Videollamada Google Meet: ${meeting.meetUrl}` : "",
+    meeting.notes ? `Notas: ${meeting.notes}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: title,
+    dates: datesParam,
+    details,
+    location: meeting.meetUrl || "Google Meet — Sala Consular GVC",
+  });
+
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+export function downloadMeetingIcs(
+  meeting: ScheduledMeetingItem,
+  clientName?: string
+): void {
+  if (typeof window === "undefined") return;
+
+  const start = new Date(meeting.dateTime);
+  const safeStart = isNaN(start.getTime()) ? new Date() : start;
+  const end = new Date(safeStart.getTime() + 45 * 60 * 1000);
+
+  const cleanAdvisor = formatDisplayName(
+    meeting.advisorName || "Especialista Legal GVC"
+  );
+  const cleanClient = formatDisplayName(clientName || "Titular");
+
+  const descriptionLines = [
+    `Sesión Consular 1-a-1 — Global Visa Consulting`,
+    `Especialista Legal: ${cleanAdvisor}`,
+    `Titular: ${cleanClient}`,
+    meeting.meetUrl ? `Enlace Google Meet: ${meeting.meetUrl}` : "",
+    meeting.notes ? `Notas: ${meeting.notes}` : "",
+  ]
+    .filter(Boolean)
+    .join("\\n");
+
+  const icsContent = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Global Visa Consulting//Sala Consular 1-a-1//ES",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${meeting.id}@globalvisaconsulting.com`,
+    `DTSTAMP:${toIcsUtcTimestamp(new Date())}`,
+    `DTSTART:${toIcsUtcTimestamp(safeStart)}`,
+    `DTEND:${toIcsUtcTimestamp(end)}`,
+    `SUMMARY:${meeting.title} — Global Visa Consulting`,
+    `DESCRIPTION:${descriptionLines}`,
+    `LOCATION:${meeting.meetUrl || "Google Meet"}`,
+    "STATUS:CONFIRMED",
+    "BEGIN:VALARM",
+    "TRIGGER:-PT30M",
+    "ACTION:DISPLAY",
+    "DESCRIPTION:Recordatorio: Tu sesión consular 1-a-1 inicia en 30 minutos",
+    "END:VALARM",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+
+  const blob = new Blob([icsContent], {
+    type: "text/calendar;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const slug = meeting.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+
+  link.href = url;
+  link.setAttribute("download", `sesion-gvc-${slug || "consular"}.ics`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 export function getDefaultDocumentsByDestination(
@@ -162,12 +263,10 @@ export function calculateApplicationMetrics(app?: VisaApplication | null): {
     };
   }
 
-  // Normalizamos todos los campos para soportar tanto Arrays como Objetos/Mapas en Firestore
   const docs = normalizeToArray<any>(app.documents);
   const deliverables = normalizeToArray<any>(app.officialDeliverables);
   const meetings = normalizeToArray<any>(app.meetings);
 
-  // Si los documentos vienen de un mapa sin la propiedad `required` explícita, asumimos que son requeridos
   const requiredDocs = docs.filter((d) =>
     typeof d?.required === "boolean" ? d.required : true
   );
@@ -391,18 +490,183 @@ export async function recordSystemLog(params: {
       id: logId,
       timestamp: new Date().toISOString(),
       category: params.category,
-      eventType: params.eventType,
+      eventType: (params.eventType || "Evento").slice(0, 115),
       outcome: params.outcome,
       actorEmail: (params.actorEmail || "desconocido").toLowerCase(),
       actorName: params.actorName
         ? formatDisplayName(params.actorName)
         : params.actorEmail || "Usuario",
       actorRole: params.actorRole || "anonymous",
-      targetResource: params.targetResource || "Sistema Global",
-      details: params.details,
-      ...(params.metadata ? { metadata: params.metadata } : {}),
+      targetResource: (params.targetResource || "Sistema Global").slice(0, 120),
+      details: (params.details || "").slice(0, 580),
+      ...(params.metadata ? { metadata: params.metadata.slice(0, 300) } : {}),
     };
 
     await setDoc(doc(db, "system_logs", logId), entry);
   } catch {}
+}
+
+async function getBearerAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (auth.currentUser) {
+    try {
+      const idToken = await auth.currentUser.getIdToken();
+      headers["Authorization"] = `Bearer ${idToken}`;
+    } catch {}
+  }
+  return headers;
+}
+
+/**
+ * Envía correos transaccionales autenticados con el Firebase ID Token (Cierra F-02)
+ */
+export async function sendTransactionalEmail(params: {
+  to: string;
+  subject: string;
+  clientName: string;
+  title: string;
+  message: string;
+  ctaLabel?: string;
+  ctaUrl?: string;
+  actorEmail?: string;
+  actorName?: string;
+  actorRole?: UserRole;
+}): Promise<{ ok: boolean; simulated?: boolean }> {
+  try {
+    const appOrigin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : "http://localhost:3000";
+
+    const headers = await getBearerAuthHeaders();
+    let ok = false;
+    let simulated = true;
+
+    try {
+      const response = await fetch("/api/notifications/email", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "SEND_EMAIL",
+          ...params,
+          ctaUrl: params.ctaUrl
+            ? params.ctaUrl.startsWith("http")
+              ? params.ctaUrl
+              : `${appOrigin}${params.ctaUrl}`
+            : `${appOrigin}/dashboard`,
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        ok = Boolean(data.ok);
+        simulated = Boolean(data.simulated);
+      }
+    } catch {
+      simulated = true;
+    }
+
+    await recordSystemLog({
+      category: "CASE_TRACEABILITY",
+      eventType: `Correo Transaccional: ${params.title}`,
+      outcome: ok ? "SUCCESS" : "WARNING",
+      actorEmail: params.actorEmail || "sistema@globalvisa.com",
+      actorName: params.actorName || "Motor Transaccional",
+      actorRole: params.actorRole || "admin",
+      targetResource: params.to,
+      details: `${params.subject} (${
+        simulated ? "Notificación registrada en SIEM" : "Enviado vía SMTP/Resend"
+      }).`,
+    });
+
+    return { ok, simulated };
+  } catch {
+    return { ok: false, simulated: true };
+  }
+}
+
+/**
+ * Solicita al servidor que genere y envíe un código 2FA OTP firmado con HMAC (Cierra F-01)
+ */
+export async function requestServerTwoFactorOtp(params: {
+  email: string;
+  fullName: string;
+  role: UserRole;
+}): Promise<{
+  ok: boolean;
+  otpChallengeToken?: string;
+  devOtpPreview?: string;
+}> {
+  try {
+    const headers = await getBearerAuthHeaders();
+    const res = await fetch("/api/notifications/email", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "SEND_OTP",
+        to: params.email,
+        clientName: params.fullName,
+      }),
+    });
+
+    const data = await res.json();
+
+    await recordSystemLog({
+      category: "SECURITY_AUTH",
+      eventType: "Despacho de Desafío 2FA Criptográfico (Server-Side OTP)",
+      outcome: data.ok ? "INFO" : "WARNING",
+      actorEmail: params.email,
+      actorName: params.fullName,
+      actorRole: params.role,
+      targetResource: "Motor HMAC-SHA256 2FA",
+      details:
+        "El servidor generó un código OTP de 6 dígitos con firma HMAC y lo envió al correo del titular.",
+    });
+
+    return {
+      ok: Boolean(data.ok),
+      otpChallengeToken: data.otpChallengeToken,
+      devOtpPreview: data.devOtpPreview,
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Verifica el código de 6 dígitos en el servidor contra la firma HMAC-SHA256 (Cierra F-01)
+ */
+export async function verifyServerTwoFactorOtp(params: {
+  otpGuess: string;
+  otpChallengeToken: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const headers = await getBearerAuthHeaders();
+    const res = await fetch("/api/notifications/email", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "VERIFY_OTP",
+        to: auth.currentUser?.email || "",
+        otpGuess: params.otpGuess,
+        otpChallengeToken: params.otpChallengeToken,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.verified) {
+      return {
+        ok: false,
+        error: data.error || "Código de verificación inválido o expirado.",
+      };
+    }
+
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      error: "Error de red verificando el segundo factor.",
+    };
+  }
 }
