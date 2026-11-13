@@ -69,7 +69,7 @@ const PLANS_BY_COUNTRY: Record<
           "Creación de cuenta oficial, gestión de pago MRV y agendamiento CAS + Embajada",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan Essential USA ($180.000 COP).",
+          "Hola Global Visa Consulting, quiero contratar el Plan Essential USA.",
       },
       {
         name: "Priority Pro USA",
@@ -90,7 +90,7 @@ const PLANS_BY_COUNTRY: Record<
           "1 Búsqueda y gestión de adelanto de cita consular incluida",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro USA ($290.000 COP).",
+          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro USA.",
       },
       {
         name: "VIP Concierge USA",
@@ -109,7 +109,7 @@ const PLANS_BY_COUNTRY: Record<
           "Soporte directo preferencial por WhatsApp durante todo el proceso",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge USA ($420.000 COP).",
+          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge USA.",
       },
     ],
   },
@@ -134,7 +134,7 @@ const PLANS_BY_COUNTRY: Record<
           "Instructivo paso a paso de ordenamiento e impresión de carpeta física",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan Essential Japón ($150.000 COP).",
+          "Hola Global Visa Consulting, quiero contratar el Plan Essential Japón.",
       },
       {
         name: "Priority Pro Japón",
@@ -155,7 +155,7 @@ const PLANS_BY_COUNTRY: Record<
           "Archivos finales en PDF auditados y listos para descarga en tu portal",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro Japón ($230.000 COP).",
+          "Hola Global Visa Consulting, quiero contratar el Plan Priority Pro Japón.",
       },
       {
         name: "VIP Concierge Japón",
@@ -174,7 +174,7 @@ const PLANS_BY_COUNTRY: Record<
           "Soporte directo por WhatsApp hasta la radicación del expediente",
         ],
         whatsappMsg:
-          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge Japón ($340.000 COP).",
+          "Hola Global Visa Consulting, quiero contratar el Plan VIP Concierge Japón.",
       },
     ],
   },
