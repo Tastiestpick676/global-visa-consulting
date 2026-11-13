@@ -519,9 +519,6 @@ async function getBearerAuthHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-/**
- * Envía correos transaccionales autenticados con el Firebase ID Token (Cierra F-02)
- */
 export async function sendTransactionalEmail(params: {
   to: string;
   subject: string;
@@ -586,9 +583,6 @@ export async function sendTransactionalEmail(params: {
   }
 }
 
-/**
- * Solicita al servidor que genere y envíe un código 2FA OTP firmado con HMAC (Cierra F-01)
- */
 export async function requestServerTwoFactorOtp(params: {
   email: string;
   fullName: string;
@@ -634,13 +628,10 @@ export async function requestServerTwoFactorOtp(params: {
   }
 }
 
-/**
- * Verifica el código de 6 dígitos en el servidor contra la firma HMAC-SHA256 (Cierra F-01)
- */
 export async function verifyServerTwoFactorOtp(params: {
   otpGuess: string;
   otpChallengeToken: string;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<{ ok: boolean; twoFactorProof?: string; error?: string }> {
   try {
     const headers = await getBearerAuthHeaders();
     const res = await fetch("/api/notifications/email", {
@@ -662,7 +653,10 @@ export async function verifyServerTwoFactorOtp(params: {
       };
     }
 
-    return { ok: true };
+    return {
+      ok: true,
+      twoFactorProof: data.twoFactorProof,
+    };
   } catch {
     return {
       ok: false,

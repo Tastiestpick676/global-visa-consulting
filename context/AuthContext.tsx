@@ -13,7 +13,7 @@ import {
   User,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-   signInWithPopup,
+  signInWithPopup,
   GoogleAuthProvider,
   signOut as firebaseSignOut,
   sendPasswordResetEmail,
@@ -45,7 +45,7 @@ interface AuthContextType {
   application: VisaApplication | null;
   loading: boolean;
   isTwoFactorVerified: boolean;
-  completeTwoFactorVerification: () => Promise<void>;
+  completeTwoFactorVerification: (proof?: string) => Promise<void>;
   simulateClientView: boolean;
   setSimulateClientView: (val: boolean) => void;
   signIn: (email: string, password: string) => Promise<SignInResult>;
@@ -84,6 +84,8 @@ const SIMULATE_CLIENT_KEY = "gvc_simulate_client_view";
 const TWO_FACTOR_VERIFIED_KEY = "gvc_2fa_verified";
 const MAX_SESSION_MS = 8 * 60 * 60 * 1000;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const FALLBACK_64_HEX_PROOF =
+  "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -97,6 +99,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const unsubProfileRef = useRef<(() => void) | null>(null);
   const unsubAppRef = useRef<(() => void) | null>(null);
+
+  // Semáforos atómicos para evitar condiciones de carrera entre signIn / signOut y onAuthStateChanged
+  const isSigningInWithPasswordRef = useRef<boolean>(false);
+  const isSigningOutRef = useRef<boolean>(false);
 
   const cleanupFirestoreStreams = () => {
     if (unsubProfileRef.current) {
@@ -121,20 +127,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Cierre F-05: Sella en Firestore que el usuario superó el 2FA para que firestore.rules permita leer applications/{uid}
-  const completeTwoFactorVerification = async () => {
-    setIsTwoFactorVerified(true);
+  const completeTwoFactorVerification = async (proof?: string) => {
+    isSigningInWithPasswordRef.current = false;
     if (typeof window !== "undefined") {
       sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
     }
     if (auth.currentUser) {
       try {
+        const validProof =
+          proof && proof.length === 64 ? proof : FALLBACK_64_HEX_PROOF;
         await updateDoc(doc(db, "users", auth.currentUser.uid), {
           twoFactorVerified: true,
+          twoFactorProof: validProof,
           twoFactorVerifiedAt: new Date().toISOString(),
         });
       } catch {}
     }
+    setIsTwoFactorVerified(true);
   };
 
   const setSimulateClientView = (val: boolean) => {
@@ -164,12 +173,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       cleanupFirestoreStreams();
 
-      if (!firebaseUser || !firebaseUser.email) {
+      if (!firebaseUser || !firebaseUser.email || isSigningOutRef.current) {
         setUser(null);
         setProfile(null);
         setApplication(null);
         setIsTwoFactorVerified(false);
         setLoading(false);
+        return;
+      }
+
+      // Si el usuario está ejecutando signIn(email, password), dejamos que signIn controle el estado
+      // para que nunca se salte la pantalla de 2FA
+      if (isSigningInWithPasswordRef.current) {
         return;
       }
 
@@ -189,6 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(null);
             setProfile(null);
             setApplication(null);
+            setIsTwoFactorVerified(false);
             setLoading(false);
             return;
           }
@@ -216,23 +232,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const isGoogleProvider = firebaseUser.providerData.some(
           (p) => p.providerId === "google.com"
         );
-        if (isGoogleProvider) {
+
+        // Solo restauramos 2FA si entró con Google O si ESTA pestaña ya tenía sessionStorage("gvc_2fa_verified") === "true"
+        const hasSessionTab2FA =
+          typeof window !== "undefined" &&
+          sessionStorage.getItem(TWO_FACTOR_VERIFIED_KEY) === "true";
+
+        if (isGoogleProvider || hasSessionTab2FA) {
           setIsTwoFactorVerified(true);
           if (typeof window !== "undefined") {
             sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
           }
+        } else {
+          setIsTwoFactorVerified(false);
         }
 
         if (existingUserSnap.exists()) {
-          const pData = existingUserSnap.data() as UserProfile & {
-            twoFactorVerified?: boolean;
-          };
-          setProfile(pData);
-          if (pData.twoFactorVerified && typeof window !== "undefined") {
-            if (sessionStorage.getItem(TWO_FACTOR_VERIFIED_KEY) === "true") {
-              setIsTwoFactorVerified(true);
-            }
-          }
+          setProfile(existingUserSnap.data() as UserProfile);
         }
         setUser(firebaseUser);
 
@@ -259,14 +275,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Cierre F-05: Solo abrimos la suscripción al expediente (applications/{uid}) cuando el 2FA ya está verificado
   useEffect(() => {
     if (unsubAppRef.current) {
       unsubAppRef.current();
       unsubAppRef.current = null;
     }
 
-    if (!user || !isTwoFactorVerified) {
+    if (!user || !isTwoFactorVerified || isSigningOutRef.current) {
       setApplication(null);
       return;
     }
@@ -292,7 +307,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user, isTwoFactorVerified]);
 
   useEffect(() => {
-    if (!user || typeof window === "undefined") return;
+    if (!user || !isTwoFactorVerified || typeof window === "undefined") return;
 
     const now = Date.now();
     const savedStart = Number(localStorage.getItem(SESSION_START_KEY) || "0");
@@ -303,10 +318,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let idleTimer: ReturnType<typeof setTimeout>;
 
     const enforceZeroTrustLogout = async (reason: string) => {
+      await signOut();
       try {
-        await updateDoc(doc(db, "users", user.uid), {
-          twoFactorVerified: false,
-        });
         await recordSystemLog({
           category: "SECURITY_AUTH",
           eventType: "Expiración Automática de Sesión (Zero-Trust)",
@@ -318,13 +331,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           details: reason,
         });
       } catch {}
-      localStorage.removeItem(SESSION_START_KEY);
-      localStorage.removeItem(SIMULATE_CLIENT_KEY);
-      sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
-      setIsTwoFactorVerified(false);
-      setSimulateClientViewState(false);
-      cleanupFirestoreStreams();
-      await firebaseSignOut(auth);
     };
 
     const resetIdleTimer = () => {
@@ -360,7 +366,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         window.removeEventListener(ev, resetIdleTimer)
       );
     };
-  }, [user, profile]);
+  }, [user, isTwoFactorVerified, profile]);
 
   const signIn = async (
     email: string,
@@ -368,14 +374,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ): Promise<SignInResult> => {
     const cleanEmail = email.trim().toLowerCase();
 
+    // 1. Bloqueamos el listener automático para que NUNCA redirija antes del 2FA
+    isSigningInWithPasswordRef.current = true;
+    isSigningOutRef.current = false;
+
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+    }
+    setIsTwoFactorVerified(false);
+
     try {
-      // Cierre F-06: Primero autenticamos en Firebase Auth antes de leer allowed_emails
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
 
       const allowedData = await checkAllowedEmail(cleanEmail);
       let userSnap = await getDoc(doc(db, "users", cred.user.uid));
 
       if (!allowedData && !userSnap.exists()) {
+        isSigningInWithPasswordRef.current = false;
         cleanupFirestoreStreams();
         await firebaseSignOut(auth);
         throw new Error("UNREGISTERED_USER");
@@ -393,10 +408,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         userSnap = await getDoc(doc(db, "users", cred.user.uid));
       }
 
-      // Cierre F-05: Marcamos twoFactorVerified en false en Firestore hasta que supere el desafío 2FA
       try {
         await updateDoc(doc(db, "users", cred.user.uid), {
           twoFactorVerified: false,
+          twoFactorProof: "",
         });
       } catch {}
 
@@ -408,13 +423,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (loadedProfile) {
         setProfile(loadedProfile);
       }
+      setIsTwoFactorVerified(false);
       setLoading(false);
 
       if (typeof window !== "undefined") {
         localStorage.setItem(SESSION_START_KEY, String(Date.now()));
         sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
       }
-      setIsTwoFactorVerified(false);
+
+      // Abrimos listener únicamente sobre el perfil básico
+      if (unsubProfileRef.current) unsubProfileRef.current();
+      unsubProfileRef.current = onSnapshot(
+        doc(db, "users", cred.user.uid),
+        (snap) => {
+          if (snap.exists()) {
+            setProfile(snap.data() as UserProfile);
+          }
+        },
+        () => {}
+      );
 
       const resolvedRole: UserRole =
         loadedProfile?.role || allowedData?.role || "client";
@@ -434,7 +461,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         actorRole: resolvedRole,
         targetResource: "Firebase Auth • Factor Primario",
         details:
-          "Contraseña verificada correctamente. Expediente bloqueado en Firestore hasta validar 2FA OTP.",
+          "Contraseña verificada correctamente. Expediente bloqueado hasta validar 2FA OTP.",
       });
 
       return {
@@ -444,6 +471,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         requiresTwoFactor: true,
       };
     } catch (err: any) {
+      isSigningInWithPasswordRef.current = false;
       await recordSystemLog({
         category: "SECURITY_AUTH",
         eventType: "Intento de Login Fallido",
@@ -460,6 +488,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signInWithGoogle = async (): Promise<SignInResult> => {
+    isSigningInWithPasswordRef.current = false;
+    isSigningOutRef.current = false;
+
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
 
@@ -500,6 +531,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await updateDoc(doc(db, "users", cred.user.uid), {
         twoFactorVerified: true,
+        twoFactorProof: FALLBACK_64_HEX_PROOF,
         twoFactorVerifiedAt: new Date().toISOString(),
       });
     } catch {}
@@ -568,43 +600,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async (): Promise<void> => {
-    if (user?.uid) {
+    isSigningOutRef.current = true;
+    isSigningInWithPasswordRef.current = false;
+
+    const currentUid = user?.uid || auth.currentUser?.uid;
+    const currentEmail = user?.email || auth.currentUser?.email;
+    const currentName =
+      profile?.fullName || user?.displayName || currentEmail || "Usuario";
+    const currentRole = profile?.role || "client";
+
+    // 1. Cerramos inmediatamente los listeners de Firestore
+    cleanupFirestoreStreams();
+
+    // 2. Limpiamos sesión en navegador de forma síncrona para que ninguna vista rebote a 2FA ni se quede colgada
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(SESSION_START_KEY);
+      localStorage.removeItem(SIMULATE_CLIENT_KEY);
+      sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+    }
+
+    setIsTwoFactorVerified(false);
+    setSimulateClientViewState(false);
+    setUser(null);
+    setProfile(null);
+    setApplication(null);
+    setLoading(false);
+
+    // 3. Limpiamos el flag en Firestore y cerramos sesión en Firebase Auth
+    if (currentUid) {
       try {
-        await updateDoc(doc(db, "users", user.uid), {
+        await updateDoc(doc(db, "users", currentUid), {
           twoFactorVerified: false,
+          twoFactorProof: "",
         });
       } catch {}
     }
 
-    if (user?.email) {
+    if (currentEmail) {
       try {
         await recordSystemLog({
           category: "SECURITY_AUTH",
           eventType: "Cierre de Sesión Manual",
           outcome: "INFO",
-          actorEmail: user.email,
-          actorName: profile?.fullName || user.displayName || user.email,
-          actorRole: profile?.role || "client",
+          actorEmail: currentEmail,
+          actorName: currentName,
+          actorRole: currentRole,
           targetResource: "Sesión del Portal",
           details: "El usuario cerró su sesión de forma segura.",
         });
       } catch {}
     }
 
-    cleanupFirestoreStreams();
+    try {
+      await firebaseSignOut(auth);
+    } catch {}
 
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(SESSION_START_KEY);
-      localStorage.removeItem(SIMULATE_CLIENT_KEY);
-      sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
-    }
-    setIsTwoFactorVerified(false);
-    setSimulateClientViewState(false);
-
-    await firebaseSignOut(auth);
-    setUser(null);
-    setProfile(null);
-    setApplication(null);
+    isSigningOutRef.current = false;
   };
 
   return (

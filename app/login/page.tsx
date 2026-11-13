@@ -1,7 +1,7 @@
 // app/login/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
@@ -38,7 +38,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  // Estados del Desafío 2FA (Validado en Servidor mediante HMAC-SHA256)
   const [otpChallengeToken, setOtpChallengeToken] = useState("");
   const [devOtpPreview, setDevOtpPreview] = useState<string | undefined>(
     undefined
@@ -59,6 +58,8 @@ export default function LoginPage() {
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
+  const isHandlingManualAuthRef = useRef<boolean>(false);
+
   const {
     user,
     profile,
@@ -72,15 +73,41 @@ export default function LoginPage() {
   } = useAuth();
   const router = useRouter();
 
+  // Cuando no hay sesión activa (al entrar o tras cerrar sesión), limpia todos los campos y reinicia el botón
   useEffect(() => {
-    if (!loading && user && profile && mode !== "2fa" && isTwoFactorVerified) {
+    if (!loading && !user) {
+      isHandlingManualAuthRef.current = false;
+      setSubmitting(false);
+      setMode("login");
+      setEmail("");
+      setPassword("");
+      setShowPassword(false);
+      setPendingUserMeta(null);
+      setOtpChallengeToken("");
+      setDevOtpPreview(undefined);
+      setOtpInput("");
+      setError("");
+    }
+  }, [loading, user]);
+
+  // Redirección automática si el usuario ya tiene sesión completa con 2FA
+  useEffect(() => {
+    if (
+      !loading &&
+      user &&
+      profile &&
+      isTwoFactorVerified &&
+      mode === "login" &&
+      !submitting &&
+      !isHandlingManualAuthRef.current
+    ) {
       const targetUrl =
         profile.role === "admin" || profile.role === "advisor"
           ? "/dashboard/admin?tab=gobernanza"
           : "/dashboard";
       router.replace(targetUrl);
     }
-  }, [loading, user, profile, mode, isTwoFactorVerified, router]);
+  }, [loading, user, profile, isTwoFactorVerified, mode, submitting, router]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -182,6 +209,7 @@ export default function LoginPage() {
     e.preventDefault();
     if (isLocked) return;
 
+    isHandlingManualAuthRef.current = true;
     setError("");
     setUnregisteredAlert(false);
     setSubmitting(true);
@@ -190,26 +218,18 @@ export default function LoginPage() {
       const result = await signIn(email, password);
       resetSecurityCounters();
 
-      if (result.requiresTwoFactor) {
-        const meta = {
-          role: result.role,
-          fullName: result.fullName,
-          email: result.email,
-        };
-        setPendingUserMeta(meta);
-        setMode("2fa");
-        setSubmitting(false);
-        await dispatchTwoFactorOtp(meta);
-        return;
-      } else {
-        completeTwoFactorVerification();
-        const destinationRoute =
-          result.role === "admin" || result.role === "advisor"
-            ? "/dashboard/admin?tab=gobernanza"
-            : "/dashboard";
-        router.replace(destinationRoute);
-      }
+      const meta = {
+        role: result.role,
+        fullName: result.fullName,
+        email: result.email,
+      };
+      setPendingUserMeta(meta);
+      setMode("2fa");
+      setSubmitting(false);
+
+      await dispatchTwoFactorOtp(meta);
     } catch (err: any) {
+      isHandlingManualAuthRef.current = false;
       if (err?.message === "UNREGISTERED_USER") {
         setUnregisteredAlert(true);
         await registerFailedAttempt(email);
@@ -283,7 +303,7 @@ export default function LoginPage() {
       }
 
       resetSecurityCounters();
-      completeTwoFactorVerification();
+      await completeTwoFactorVerification(verification.twoFactorProof);
 
       await recordSystemLog({
         category: "SECURITY_AUTH",
@@ -301,6 +321,18 @@ export default function LoginPage() {
         pendingUserMeta.role === "admin" || pendingUserMeta.role === "advisor"
           ? "/dashboard/admin?tab=gobernanza"
           : "/dashboard";
+
+      // Limpiar estados del formulario antes de salir para que el caché de rutas nunca guarde "Verificando..."
+      isHandlingManualAuthRef.current = false;
+      setSubmitting(false);
+      setEmail("");
+      setPassword("");
+      setShowPassword(false);
+      setOtpInput("");
+      setOtpChallengeToken("");
+      setPendingUserMeta(null);
+      setMode("login");
+
       router.replace(targetRoute);
     } catch {
       setSubmitting(false);
@@ -308,13 +340,15 @@ export default function LoginPage() {
   };
 
   const handleCancelTwoFactor = async () => {
-    await signOut();
+    isHandlingManualAuthRef.current = false;
     setPendingUserMeta(null);
     setOtpChallengeToken("");
     setDevOtpPreview(undefined);
     setOtpInput("");
+    setPassword("");
     setSubmitting(false);
     setMode("login");
+    await signOut();
   };
 
   const handleSubmitForgotPassword = async (e: React.FormEvent) => {
@@ -337,19 +371,28 @@ export default function LoginPage() {
 
   const handleGoogleLogin = async () => {
     if (isLocked) return;
+    isHandlingManualAuthRef.current = true;
     setError("");
     setUnregisteredAlert(false);
     setSubmitting(true);
     try {
       const result = await signInWithGoogle();
       resetSecurityCounters();
-      completeTwoFactorVerification();
+      await completeTwoFactorVerification();
+
       const targetRoute =
         result.role === "admin" || result.role === "advisor"
           ? "/dashboard/admin?tab=gobernanza"
           : "/dashboard";
+
+      isHandlingManualAuthRef.current = false;
+      setSubmitting(false);
+      setEmail("");
+      setPassword("");
+
       router.replace(targetRoute);
     } catch (err: any) {
+      isHandlingManualAuthRef.current = false;
       if (err?.message === "UNREGISTERED_USER") {
         setUnregisteredAlert(true);
       } else {

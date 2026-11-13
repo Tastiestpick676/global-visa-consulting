@@ -11,7 +11,6 @@ interface EmailPayload {
   message?: string;
   ctaLabel?: string;
   ctaUrl?: string;
-  // Para verificación OTP en servidor
   otpGuess?: string;
   otpChallengeToken?: string;
 }
@@ -21,30 +20,81 @@ const OTP_SECRET =
   process.env.RESEND_API_KEY ||
   "gvc-zero-trust-local-hmac-secret-2026";
 
-function createOtpChallengeToken(email: string, code: string, expiresAt: number): string {
-  const data = `${email.toLowerCase()}:${code}:${expiresAt}`;
+// Rate limiter en memoria: máx 6 peticiones por minuto por usuario autenticado
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+// Registro de tokens OTP ya consumidos para impedir Replay Attacks
+const consumedChallenges = new Set<string>();
+
+function checkRateLimit(identifier: string, maxPerMin = 6): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(identifier);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(identifier, { count: 1, resetAt: now + 60_000 });
+    return true;
+  }
+  if (entry.count >= maxPerMin) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
+}
+
+function sanitizeCtaUrl(rawUrl?: string, requestOrigin?: string): string | undefined {
+  if (!rawUrl) return undefined;
+  try {
+    const parsed = new URL(rawUrl, requestOrigin || "http://localhost:3000");
+    const allowedOrigins = [
+      requestOrigin || "http://localhost:3000",
+      "https://calendar.google.com",
+    ];
+    if (
+      allowedOrigins.some((origin) => parsed.origin === origin) &&
+      (parsed.protocol === "https:" || parsed.protocol === "http:")
+    ) {
+      return parsed.toString();
+    }
+  } catch {}
+  return `${requestOrigin || "http://localhost:3000"}/dashboard`;
+}
+
+function createOtpChallengeToken(
+  email: string,
+  code: string,
+  expiresAt: number
+): string {
+  const nonce = crypto.randomBytes(8).toString("hex");
+  const data = `${email.toLowerCase()}:${code}:${expiresAt}:${nonce}`;
   const signature = crypto
     .createHmac("sha256", OTP_SECRET)
     .update(data)
     .digest("hex");
-  return `${expiresAt}.${signature}`;
+  return `${expiresAt}.${nonce}.${signature}`;
 }
 
 function verifyOtpChallengeToken(
   email: string,
   guess: string,
   challengeToken: string
-): { valid: boolean; reason?: string } {
-  const parts = challengeToken.split(".");
-  if (parts.length !== 2) return { valid: false, reason: "Token inválido." };
+): { valid: boolean; reason?: string; proof?: string } {
+  if (consumedChallenges.has(challengeToken)) {
+    return {
+      valid: false,
+      reason: "Este código ya fue utilizado. Solicita uno nuevo.",
+    };
+  }
 
-  const [expiresAtStr, signature] = parts;
+  const parts = challengeToken.split(".");
+  if (parts.length !== 3) {
+    return { valid: false, reason: "Token de desafío inválido." };
+  }
+
+  const [expiresAtStr, nonce, signature] = parts;
   const expiresAt = Number(expiresAtStr);
   if (!expiresAt || Date.now() > expiresAt) {
     return { valid: false, reason: "El código ha expirado (límite 5 min)." };
   }
 
-  const expectedData = `${email.toLowerCase()}:${guess.trim()}:${expiresAt}`;
+  const expectedData = `${email.toLowerCase()}:${guess.trim()}:${expiresAt}:${nonce}`;
   const expectedSig = crypto
     .createHmac("sha256", OTP_SECRET)
     .update(expectedData)
@@ -59,13 +109,20 @@ function verifyOtpChallengeToken(
     return { valid: false, reason: "El código de 6 dígitos es incorrecto." };
   }
 
-  return { valid: true };
+  // Marcar token como consumido (Single-Use Anti-Replay)
+  consumedChallenges.add(challengeToken);
+
+  const proof = crypto
+    .createHmac("sha256", OTP_SECRET)
+    .update(`VERIFIED_2FA:${email.toLowerCase()}:${nonce}`)
+    .digest("hex");
+
+  return { valid: true, proof };
 }
 
-/**
- * Verifica que quien llama al endpoint tenga un Firebase ID Token real y activo
- */
-async function verifyFirebaseIdToken(authHeader: string | null): Promise<string | null> {
+async function verifyFirebaseIdToken(
+  authHeader: string | null
+): Promise<string | null> {
   if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
   const idToken = authHeader.replace("Bearer ", "").trim();
   const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
@@ -130,7 +187,7 @@ function buildEmailHtml(
                     <span style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;color:#6B7280;letter-spacing:0.1em;">
                       Código de Verificación (Expira en 5 min)
                     </span>
-                    <span style="display:block;font-family:monospace;size:32px;font-size:32px;font-weight:800;letter-spacing:0.25em;color:#111315;margin-top:8px;">
+                    <span style="display:block;font-family:monospace;font-size:32px;font-weight:800;letter-spacing:0.25em;color:#111315;margin-top:8px;">
                       ${otpCode}
                     </span>
                   </div>`
@@ -157,7 +214,6 @@ function buildEmailHtml(
 
 export async function POST(request: Request) {
   try {
-    // 1. Validar que la petición provenga de un usuario autenticado en Firebase
     const callerEmail = await verifyFirebaseIdToken(
       request.headers.get("authorization")
     );
@@ -168,10 +224,21 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!checkRateLimit(callerEmail, 6)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Límite de velocidad excedido (Rate Limit). Espera 60 segundos.",
+        },
+        { status: 429 }
+      );
+    }
+
     const body = (await request.json()) as EmailPayload;
     const action = body.action || "SEND_EMAIL";
+    const reqOrigin = new URL(request.url).origin;
 
-    // 2. Acción: VERIFICAR CÓDIGO 2FA EN EL SERVIDOR
     if (action === "VERIFY_OTP") {
       if (!body.otpGuess || !body.otpChallengeToken) {
         return NextResponse.json(
@@ -190,10 +257,13 @@ export async function POST(request: Request) {
           { status: 403 }
         );
       }
-      return NextResponse.json({ ok: true, verified: true });
+      return NextResponse.json({
+        ok: true,
+        verified: true,
+        twoFactorProof: verification.proof,
+      });
     }
 
-    // 3. Si es SEND_OTP, el código de 6 dígitos se genera EXCLUSIVAMENTE en el servidor
     let serverGeneratedOtp: string | undefined;
     let otpChallengeToken: string | undefined;
 
@@ -208,7 +278,14 @@ export async function POST(request: Request) {
       );
     }
 
-    const to = (body.to || callerEmail).trim().toLowerCase();
+    // En SEND_OTP obligamos a que el correo vaya exclusivamente al callerEmail autenticado
+    const to =
+      action === "SEND_OTP"
+        ? callerEmail
+        : (body.to || callerEmail).trim().toLowerCase();
+
+    const safeCtaUrl = sanitizeCtaUrl(body.ctaUrl, reqOrigin);
+
     const subject =
       action === "SEND_OTP"
         ? `Código de acceso: ${serverGeneratedOtp} — Global Visa Consulting`
@@ -234,7 +311,6 @@ export async function POST(request: Request) {
         ok: true,
         simulated: true,
         otpChallengeToken,
-        // Solo en desarrollo local sin RESEND_API_KEY se envía el código de prueba
         devOtpPreview:
           process.env.NODE_ENV === "development"
             ? serverGeneratedOtp
@@ -247,7 +323,7 @@ export async function POST(request: Request) {
       title,
       message,
       ctaLabel: body.ctaLabel,
-      ctaUrl: body.ctaUrl,
+      ctaUrl: safeCtaUrl,
       otpCode: serverGeneratedOtp,
     });
 
@@ -293,7 +369,7 @@ export async function POST(request: Request) {
               title,
               message,
               ctaLabel: body.ctaLabel,
-              ctaUrl: body.ctaUrl,
+              ctaUrl: safeCtaUrl,
               otpCode: serverGeneratedOtp,
             },
             `MODO PRUEBA RESEND: Destinatario original (${to}). Verifica tu dominio propio en Resend para envío directo.`

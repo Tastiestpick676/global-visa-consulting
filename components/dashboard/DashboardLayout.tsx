@@ -7,7 +7,6 @@ import {
   usePathname,
   useRouter,
   useSearchParams,
-  redirect,
 } from "next/navigation";
 import {
   LayoutDashboard,
@@ -206,6 +205,7 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
     application,
     signOut,
     loading,
+    isTwoFactorVerified,
     simulateClientView,
     setSimulateClientView,
   } = useAuth();
@@ -251,8 +251,40 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
     };
   }, [notifOpen]);
 
+  // Guardián de rutas asíncrono: verifica tanto usuario como 2FA completado
   useEffect(() => {
-    if (!user) return;
+    if (loading || isSigningOut) return;
+
+    if (!user || !isTwoFactorVerified) {
+      router.replace("/login");
+      return;
+    }
+
+    if (profile && pathname.startsWith("/dashboard/admin") && !isStaff) {
+      router.replace("/dashboard");
+      return;
+    }
+
+    if (profile && isStaff && !simulateClientView && pathname === "/dashboard") {
+      router.replace("/dashboard/admin?tab=gobernanza");
+    }
+  }, [
+    loading,
+    isSigningOut,
+    user,
+    isTwoFactorVerified,
+    profile,
+    isStaff,
+    simulateClientView,
+    pathname,
+    router,
+  ]);
+
+  useEffect(() => {
+    if (!user || !isTwoFactorVerified || isSigningOut) {
+      setNotifications([]);
+      return;
+    }
     const targets = isStaff ? [user.uid, "STAFF"] : [user.uid];
     const q = query(
       collection(db, "notifications"),
@@ -273,10 +305,10 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
     );
 
     return () => unsub();
-  }, [user, isStaff]);
+  }, [user, isTwoFactorVerified, isStaff, isSigningOut]);
 
-  // Pantalla de transición al cerrar sesión (evita parpadeos hacia la ventana de 2FA)
-  if (isSigningOut) {
+  // Pantalla de transición al cerrar sesión (o mientras redirige por falta de sesión/2FA)
+  if (isSigningOut || (!loading && (!user || !isTwoFactorVerified))) {
     return (
       <div className="min-h-screen bg-brand-charcoal text-brand-white flex flex-col items-center justify-center p-6 font-sans select-none">
         <div className="w-full max-w-sm rounded-3xl bg-white/[0.04] border border-white/10 p-8 text-center space-y-5 shadow-2xl">
@@ -299,29 +331,6 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
         </div>
       </div>
     );
-  }
-
-  if (!loading && !user) {
-    redirect("/login");
-  }
-
-  if (
-    !loading &&
-    profile &&
-    pathname.startsWith("/dashboard/admin") &&
-    !isStaff
-  ) {
-    redirect("/dashboard");
-  }
-
-  if (
-    !loading &&
-    profile &&
-    isStaff &&
-    !simulateClientView &&
-    pathname === "/dashboard"
-  ) {
-    redirect("/dashboard/admin?tab=gobernanza");
   }
 
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -360,14 +369,17 @@ function DashboardLayoutInner({ children }: { children: ReactNode }) {
     }
   };
 
-  const handleSignOut = async () => {
-    setMobileMenuOpen(false);
-    setIsSigningOut(true);
-    await signOut();
-    setTimeout(() => {
-      router.replace("/login");
-    }, 550);
-  };
+    const handleSignOut = async () => {
+        if (isSigningOut) return;
+     setMobileMenuOpen(false);
+     setNotifOpen(false);
+     setIsSigningOut(true);
+     try {
+       await signOut();
+     }  finally {
+      window.location.replace("/login");
+    }
+    };
 
   const showClientMenu = !isStaff || simulateClientView;
   const avatarUrl =
