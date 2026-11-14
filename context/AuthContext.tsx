@@ -82,6 +82,7 @@ const AuthContext = createContext<AuthContextType>({
 const SESSION_START_KEY = "gvc_session_start";
 const SIMULATE_CLIENT_KEY = "gvc_simulate_client_view";
 const TWO_FACTOR_VERIFIED_KEY = "gvc_2fa_verified";
+const PENDING_2FA_KEY = "gvc_pending_2fa_challenge";
 const MAX_SESSION_MS = 8 * 60 * 60 * 1000;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const FALLBACK_64_HEX_PROOF =
@@ -100,8 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const unsubProfileRef = useRef<(() => void) | null>(null);
   const unsubAppRef = useRef<(() => void) | null>(null);
 
-  // Semáforos atómicos para evitar condiciones de carrera entre signIn / signOut y onAuthStateChanged
-  const isSigningInWithPasswordRef = useRef<boolean>(false);
+  const isSigningInRef = useRef<boolean>(false);
   const isSigningOutRef = useRef<boolean>(false);
 
   const cleanupFirestoreStreams = () => {
@@ -121,17 +121,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (savedSim === "true") {
       setSimulateClientViewState(true);
     }
-    const saved2FA = sessionStorage.getItem(TWO_FACTOR_VERIFIED_KEY);
-    if (saved2FA === "true") {
-      setIsTwoFactorVerified(true);
-    }
   }, []);
 
   const completeTwoFactorVerification = async (proof?: string) => {
-    isSigningInWithPasswordRef.current = false;
+    isSigningInRef.current = false;
     if (typeof window !== "undefined") {
+      sessionStorage.removeItem(PENDING_2FA_KEY);
       sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
     }
+    setIsTwoFactorVerified(true);
+
     if (auth.currentUser) {
       try {
         const validProof =
@@ -143,7 +142,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       } catch {}
     }
-    setIsTwoFactorVerified(true);
   };
 
   const setSimulateClientView = (val: boolean) => {
@@ -182,15 +180,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Si el usuario está ejecutando signIn(email, password), dejamos que signIn controle el estado
-      // para que nunca se salte la pantalla de 2FA
-      if (isSigningInWithPasswordRef.current) {
+      if (isSigningInRef.current) {
         return;
       }
 
       setLoading(true);
 
       try {
+        // BLOQUEO ANTI-BYPASS POR REFRESH:
+        // Si el usuario refresca la página (F5) cuando tenía un desafío 2FA pendiente
+        // o no tiene "gvc_2fa_verified" === "true" en esta sesión, NUNCA se le concede acceso.
+        const isPending2FA =
+          typeof window !== "undefined" &&
+          sessionStorage.getItem(PENDING_2FA_KEY) === "true";
+        const hasSessionTab2FA =
+          typeof window !== "undefined" &&
+          sessionStorage.getItem(TWO_FACTOR_VERIFIED_KEY) === "true";
+
+        if (isPending2FA || !hasSessionTab2FA) {
+          // Si refrescó la página sin completar el MFA, mantenemos isTwoFactorVerified en false
+          // y cerramos la sesión incompleta para obligarlo a autenticarse con MFA
+          setIsTwoFactorVerified(false);
+          if (typeof window !== "undefined") {
+            sessionStorage.removeItem(PENDING_2FA_KEY);
+            sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+          }
+          await firebaseSignOut(auth);
+          setUser(null);
+          setProfile(null);
+          setApplication(null);
+          setLoading(false);
+          return;
+        }
+
         const cleanEmail = firebaseUser.email.trim().toLowerCase();
         const userRef = doc(db, "users", firebaseUser.uid);
         let existingUserSnap = await getDoc(userRef);
@@ -222,34 +244,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           existingUserSnap = await getDoc(userRef);
         }
 
-        if (
-          typeof window !== "undefined" &&
-          !localStorage.getItem(SESSION_START_KEY)
-        ) {
-          localStorage.setItem(SESSION_START_KEY, String(Date.now()));
-        }
-
-        const isGoogleProvider = firebaseUser.providerData.some(
-          (p) => p.providerId === "google.com"
-        );
-
-        // Solo restauramos 2FA si entró con Google O si ESTA pestaña ya tenía sessionStorage("gvc_2fa_verified") === "true"
-        const hasSessionTab2FA =
-          typeof window !== "undefined" &&
-          sessionStorage.getItem(TWO_FACTOR_VERIFIED_KEY) === "true";
-
-        if (isGoogleProvider || hasSessionTab2FA) {
-          setIsTwoFactorVerified(true);
-          if (typeof window !== "undefined") {
-            sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
-          }
-        } else {
-          setIsTwoFactorVerified(false);
-        }
-
         if (existingUserSnap.exists()) {
-          setProfile(existingUserSnap.data() as UserProfile);
+          const pData = existingUserSnap.data() as UserProfile & {
+            twoFactorVerified?: boolean;
+          };
+          // Verificar que además de sessionStorage, en Firestore no haya sido revocado el 2FA
+          if (pData.twoFactorVerified === false) {
+            sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+            setIsTwoFactorVerified(false);
+            await firebaseSignOut(auth);
+            setUser(null);
+            setProfile(null);
+            setApplication(null);
+            setLoading(false);
+            return;
+          }
+          setProfile(pData);
         }
+
+        setIsTwoFactorVerified(true);
         setUser(firebaseUser);
 
         unsubProfileRef.current = onSnapshot(
@@ -374,29 +387,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ): Promise<SignInResult> => {
     const cleanEmail = email.trim().toLowerCase();
 
-    // 1. Bloqueamos el listener automático para que NUNCA redirija antes del 2FA
-    isSigningInWithPasswordRef.current = true;
+    isSigningInRef.current = true;
     isSigningOutRef.current = false;
 
     if (typeof window !== "undefined") {
       sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+      sessionStorage.setItem(PENDING_2FA_KEY, "true");
     }
     setIsTwoFactorVerified(false);
 
     try {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
 
-      const allowedData = await checkAllowedEmail(cleanEmail);
-      let userSnap = await getDoc(doc(db, "users", cred.user.uid));
+      // Leemos perfil y lista blanca en paralelo para no bloquear en redes móviles
+      const [allowedData, initialUserSnap] = await Promise.all([
+        checkAllowedEmail(cleanEmail),
+        getDoc(doc(db, "users", cred.user.uid)).catch(() => null),
+      ]);
 
-      if (!allowedData && !userSnap.exists()) {
-        isSigningInWithPasswordRef.current = false;
+      let userSnap = initialUserSnap;
+
+      if (!allowedData && (!userSnap || !userSnap.exists())) {
+        isSigningInRef.current = false;
+        if (typeof window !== "undefined") {
+          sessionStorage.removeItem(PENDING_2FA_KEY);
+        }
         cleanupFirestoreStreams();
         await firebaseSignOut(auth);
         throw new Error("UNREGISTERED_USER");
       }
 
-      if (allowedData && !userSnap.exists()) {
+      if (allowedData && (!userSnap || !userSnap.exists())) {
         await initializeUserAndApplication(
           cred.user.uid,
           cleanEmail,
@@ -405,19 +426,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           allowedData.role || "client",
           allowedData.planTier || "Priority Pro"
         );
-        userSnap = await getDoc(doc(db, "users", cred.user.uid));
+        userSnap = await getDoc(doc(db, "users", cred.user.uid)).catch(
+          () => null
+        );
       }
 
-      try {
-        await updateDoc(doc(db, "users", cred.user.uid), {
-          twoFactorVerified: false,
-          twoFactorProof: "",
-        });
-      } catch {}
-
-      const loadedProfile = userSnap.exists()
-        ? (userSnap.data() as UserProfile)
-        : null;
+      const loadedProfile =
+        userSnap && userSnap.exists()
+          ? (userSnap.data() as UserProfile)
+          : null;
 
       setUser(cred.user);
       if (loadedProfile) {
@@ -429,19 +446,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (typeof window !== "undefined") {
         localStorage.setItem(SESSION_START_KEY, String(Date.now()));
         sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+        sessionStorage.setItem(PENDING_2FA_KEY, "true");
       }
-
-      // Abrimos listener únicamente sobre el perfil básico
-      if (unsubProfileRef.current) unsubProfileRef.current();
-      unsubProfileRef.current = onSnapshot(
-        doc(db, "users", cred.user.uid),
-        (snap) => {
-          if (snap.exists()) {
-            setProfile(snap.data() as UserProfile);
-          }
-        },
-        () => {}
-      );
 
       const resolvedRole: UserRole =
         loadedProfile?.role || allowedData?.role || "client";
@@ -452,7 +458,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           cleanEmail
       );
 
-      await recordSystemLog({
+      // Ejecutamos las escrituras secundarias sin bloquear la apertura de la pantalla 2FA en móvil
+      updateDoc(doc(db, "users", cred.user.uid), {
+        twoFactorVerified: false,
+        twoFactorProof: "",
+      }).catch(() => {});
+
+      recordSystemLog({
         category: "SECURITY_AUTH",
         eventType: "Credenciales Primarias Validadas (Pendiente 2FA)",
         outcome: "INFO",
@@ -462,7 +474,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         targetResource: "Firebase Auth • Factor Primario",
         details:
           "Contraseña verificada correctamente. Expediente bloqueado hasta validar 2FA OTP.",
-      });
+      }).catch(() => {});
 
       return {
         role: resolvedRole,
@@ -471,8 +483,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         requiresTwoFactor: true,
       };
     } catch (err: any) {
-      isSigningInWithPasswordRef.current = false;
-      await recordSystemLog({
+      isSigningInRef.current = false;
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem(PENDING_2FA_KEY);
+      }
+      recordSystemLog({
         category: "SECURITY_AUTH",
         eventType: "Intento de Login Fallido",
         outcome: "WARNING",
@@ -482,102 +497,117 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         targetResource: "Portal de Acceso",
         details:
           "Credenciales inválidas o cuenta pendiente de configuración de clave.",
-      });
+      }).catch(() => {});
       throw err;
     }
   };
 
   const signInWithGoogle = async (): Promise<SignInResult> => {
-    isSigningInWithPasswordRef.current = false;
+    isSigningInRef.current = true;
     isSigningOutRef.current = false;
 
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
-
-    const cred = await signInWithPopup(auth, provider);
-    const cleanEmail = (cred.user.email || "").trim().toLowerCase();
-
-    const allowedData = await checkAllowedEmail(cleanEmail);
-    let userSnap = await getDoc(doc(db, "users", cred.user.uid));
-
-    if (!allowedData && !userSnap.exists()) {
-      cleanupFirestoreStreams();
-      await firebaseSignOut(auth);
-      await recordSystemLog({
-        category: "SECURITY_AUTH",
-        eventType: "Acceso Google Bloqueado (No Provisionado)",
-        outcome: "WARNING",
-        actorEmail: cleanEmail || "desconocido",
-        actorName: cred.user.displayName || cleanEmail,
-        actorRole: "anonymous",
-        targetResource: "Google OAuth 2.0",
-        details: `Cuenta de Google (${cleanEmail}) rechazada por no tener expediente activo.`,
-      });
-      throw new Error("UNREGISTERED_USER");
-    }
-
-    if (allowedData && !userSnap.exists()) {
-      await initializeUserAndApplication(
-        cred.user.uid,
-        cleanEmail,
-        allowedData.fullName || cred.user.displayName || "Titular Autorizado",
-        allowedData.destination || "USA",
-        allowedData.role || "client",
-        allowedData.planTier || "Priority Pro"
-      );
-      userSnap = await getDoc(doc(db, "users", cred.user.uid));
-    }
-
     try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+
+      const cred = await signInWithPopup(auth, provider);
+      const cleanEmail = (cred.user.email || "").trim().toLowerCase();
+
+      const [allowedData, initialUserSnap] = await Promise.all([
+        checkAllowedEmail(cleanEmail),
+        getDoc(doc(db, "users", cred.user.uid)).catch(() => null),
+      ]);
+
+      let userSnap = initialUserSnap;
+
+      if (!allowedData && (!userSnap || !userSnap.exists())) {
+        isSigningInRef.current = false;
+        cleanupFirestoreStreams();
+        await firebaseSignOut(auth);
+        recordSystemLog({
+          category: "SECURITY_AUTH",
+          eventType: "Acceso Google Bloqueado (No Provisionado)",
+          outcome: "WARNING",
+          actorEmail: cleanEmail || "desconocido",
+          actorName: cred.user.displayName || cleanEmail,
+          actorRole: "anonymous",
+          targetResource: "Google OAuth 2.0",
+          details: `Cuenta de Google (${cleanEmail}) rechazada por no tener expediente activo.`,
+        }).catch(() => {});
+        throw new Error("UNREGISTERED_USER");
+      }
+
+      if (allowedData && (!userSnap || !userSnap.exists())) {
+        await initializeUserAndApplication(
+          cred.user.uid,
+          cleanEmail,
+          allowedData.fullName ||
+            cred.user.displayName ||
+            "Titular Autorizado",
+          allowedData.destination || "USA",
+          allowedData.role || "client",
+          allowedData.planTier || "Priority Pro"
+        );
+        userSnap = await getDoc(doc(db, "users", cred.user.uid)).catch(
+          () => null
+        );
+      }
+
       await updateDoc(doc(db, "users", cred.user.uid), {
         twoFactorVerified: true,
         twoFactorProof: FALLBACK_64_HEX_PROOF,
         twoFactorVerifiedAt: new Date().toISOString(),
-      });
-    } catch {}
+      }).catch(() => {});
 
-    const loadedProfile = userSnap.exists()
-      ? (userSnap.data() as UserProfile)
-      : null;
+      const loadedProfile =
+        userSnap && userSnap.exists()
+          ? (userSnap.data() as UserProfile)
+          : null;
 
-    setUser(cred.user);
-    if (loadedProfile) {
-      setProfile(loadedProfile);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(SESSION_START_KEY, String(Date.now()));
+        sessionStorage.removeItem(PENDING_2FA_KEY);
+        sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
+      }
+
+      setUser(cred.user);
+      if (loadedProfile) {
+        setProfile(loadedProfile);
+      }
+      setIsTwoFactorVerified(true);
+      setLoading(false);
+      isSigningInRef.current = false;
+
+      const resolvedRole: UserRole =
+        loadedProfile?.role || allowedData?.role || "client";
+      const resolvedName = formatDisplayName(
+        loadedProfile?.fullName ||
+          allowedData?.fullName ||
+          cred.user.displayName ||
+          cleanEmail
+      );
+
+      recordSystemLog({
+        category: "SECURITY_AUTH",
+        eventType: "Inicio de Sesión Exitoso (Google OAuth + MFA)",
+        outcome: "SUCCESS",
+        actorEmail: cleanEmail,
+        actorName: resolvedName,
+        actorRole: resolvedRole,
+        targetResource: "Google OAuth 2.0 • Token 8h",
+        details: "Autenticación federada con Google completada exitosamente.",
+      }).catch(() => {});
+
+      return {
+        role: resolvedRole,
+        fullName: resolvedName,
+        email: cleanEmail,
+        requiresTwoFactor: false,
+      };
+    } catch (err) {
+      isSigningInRef.current = false;
+      throw err;
     }
-    setIsTwoFactorVerified(true);
-    setLoading(false);
-
-    if (typeof window !== "undefined") {
-      localStorage.setItem(SESSION_START_KEY, String(Date.now()));
-      sessionStorage.setItem(TWO_FACTOR_VERIFIED_KEY, "true");
-    }
-
-    const resolvedRole: UserRole =
-      loadedProfile?.role || allowedData?.role || "client";
-    const resolvedName = formatDisplayName(
-      loadedProfile?.fullName ||
-        allowedData?.fullName ||
-        cred.user.displayName ||
-        cleanEmail
-    );
-
-    await recordSystemLog({
-      category: "SECURITY_AUTH",
-      eventType: "Inicio de Sesión Exitoso (Google OAuth + MFA)",
-      outcome: "SUCCESS",
-      actorEmail: cleanEmail,
-      actorName: resolvedName,
-      actorRole: resolvedRole,
-      targetResource: "Google OAuth 2.0 • Token 8h",
-      details: "Autenticación federada con Google completada exitosamente.",
-    });
-
-    return {
-      role: resolvedRole,
-      fullName: resolvedName,
-      email: cleanEmail,
-      requiresTwoFactor: false,
-    };
   };
 
   const requestPasswordReset = async (email: string): Promise<void> => {
@@ -587,7 +617,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await sendPasswordResetEmail(auth, cleanEmail);
     } catch {}
 
-    await recordSystemLog({
+    recordSystemLog({
       category: "SECURITY_AUTH",
       eventType: "Solicitud de Enlace Criptográfico de Contraseña",
       outcome: "INFO",
@@ -596,12 +626,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       actorRole: "anonymous",
       targetResource: "Recuperación de Credenciales",
       details: `Se procesó solicitud de enlace de contraseña para ${cleanEmail}.`,
-    });
+    }).catch(() => {});
   };
 
   const signOut = async (): Promise<void> => {
     isSigningOutRef.current = true;
-    isSigningInWithPasswordRef.current = false;
+    isSigningInRef.current = false;
 
     const currentUid = user?.uid || auth.currentUser?.uid;
     const currentEmail = user?.email || auth.currentUser?.email;
@@ -609,14 +639,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profile?.fullName || user?.displayName || currentEmail || "Usuario";
     const currentRole = profile?.role || "client";
 
-    // 1. Cerramos inmediatamente los listeners de Firestore
     cleanupFirestoreStreams();
 
-    // 2. Limpiamos sesión en navegador de forma síncrona para que ninguna vista rebote a 2FA ni se quede colgada
     if (typeof window !== "undefined") {
       localStorage.removeItem(SESSION_START_KEY);
       localStorage.removeItem(SIMULATE_CLIENT_KEY);
       sessionStorage.removeItem(TWO_FACTOR_VERIFIED_KEY);
+      sessionStorage.removeItem(PENDING_2FA_KEY);
     }
 
     setIsTwoFactorVerified(false);
@@ -626,29 +655,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setApplication(null);
     setLoading(false);
 
-    // 3. Limpiamos el flag en Firestore y cerramos sesión en Firebase Auth
     if (currentUid) {
-      try {
-        await updateDoc(doc(db, "users", currentUid), {
-          twoFactorVerified: false,
-          twoFactorProof: "",
-        });
-      } catch {}
+      await updateDoc(doc(db, "users", currentUid), {
+        twoFactorVerified: false,
+        twoFactorProof: "",
+      }).catch(() => {});
     }
 
     if (currentEmail) {
-      try {
-        await recordSystemLog({
-          category: "SECURITY_AUTH",
-          eventType: "Cierre de Sesión Manual",
-          outcome: "INFO",
-          actorEmail: currentEmail,
-          actorName: currentName,
-          actorRole: currentRole,
-          targetResource: "Sesión del Portal",
-          details: "El usuario cerró su sesión de forma segura.",
-        });
-      } catch {}
+      recordSystemLog({
+        category: "SECURITY_AUTH",
+        eventType: "Cierre de Sesión Manual",
+        outcome: "INFO",
+        actorEmail: currentEmail,
+        actorName: currentName,
+        actorRole: currentRole,
+        targetResource: "Sesión del Portal",
+        details: "El usuario cerró su sesión de forma segura.",
+      }).catch(() => {});
     }
 
     try {
