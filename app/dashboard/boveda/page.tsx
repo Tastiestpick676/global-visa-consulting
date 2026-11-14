@@ -523,12 +523,21 @@ async function sendViaResend(params: {
   html: string;
   buildHtmlWithBanner: (bannerHtml: string) => string;
 }) {
-  const apiKey = process.env.RESEND_API_KEY;
+  const apiKey = process.env.RESEND_API_KEY?.trim().replace(/^['"]|['"]$/g, "");
+
+  // Limpia comillas accidentales en Vercel y usa tu dominio oficial por defecto
+  const rawFrom = process.env.RESEND_FROM_EMAIL?.trim().replace(
+    /^['"]|['"]$/g,
+    ""
+  );
   const fromEmail =
-    process.env.RESEND_FROM_EMAIL ||
-    "Global Visa Consulting <notificaciones@globalvisaconsult.com>";
+    rawFrom && !rawFrom.includes("onboarding@resend.dev")
+      ? rawFrom
+      : "Global Visa Consulting <notificaciones@globalvisaconsult.com>";
+
   const fallbackAdminEmail =
-    process.env.RESEND_FALLBACK_EMAIL || "garayluis0331@gmail.com";
+    process.env.RESEND_FALLBACK_EMAIL?.trim().replace(/^['"]|['"]$/g, "") ||
+    "garayluis0331@gmail.com";
 
   if (!apiKey) {
     return { delivered: false, mode: "dev-no-api-key" };
@@ -553,8 +562,10 @@ async function sendViaResend(params: {
   }
 
   const errBody = await primaryRes.json().catch(() => ({}));
+  const resendReason =
+    errBody?.message || errBody?.error || `HTTP ${primaryRes.status}`;
 
-  // Si Resend devuelve 403/422/400 (ej. modo Sandbox o dominio no verificado), reenvía al correo administrador de respaldo
+  // Si Resend rechaza el envío directo, reenvía al correo admin mostrando la causa exacta de Resend
   if (
     (primaryRes.status === 403 ||
       primaryRes.status === 422 ||
@@ -566,7 +577,9 @@ async function sendViaResend(params: {
       <div style="background:#FEF3C7;color:#92400E;padding:10px 24px;font-size:11px;font-weight:700;border-bottom:1px solid #FDE68A;">
         MODO PRUEBA RESEND: Destinatario original (${escapeHtml(
           params.to
-        )}). Verifica tu dominio propio en Resend para envío directo.
+        )}). Motivo Resend (from: ${escapeHtml(fromEmail)}): ${escapeHtml(
+      String(resendReason)
+    )}
       </div>`;
 
     const retryRes = await fetch("https://api.resend.com/emails", {
@@ -591,7 +604,7 @@ async function sendViaResend(params: {
   return {
     delivered: false,
     mode: "error",
-    error: errBody?.message || `Error HTTP ${primaryRes.status}`,
+    error: String(resendReason),
   };
 }
 
