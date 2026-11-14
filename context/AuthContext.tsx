@@ -610,12 +610,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const requestPasswordReset = async (email: string): Promise<void> => {
+    const requestPasswordReset = async (email: string): Promise<void> => {
     const cleanEmail = email.trim().toLowerCase();
 
     try {
-      await sendPasswordResetEmail(auth, cleanEmail);
-    } catch {}
+      const res = await fetch("/api/notifications/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "send_password_reset",
+          email: cleanEmail,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      // Si aún no se ha agregado FIREBASE_SERVICE_ACCOUNT_KEY en .env.local, usa el respaldo
+      if (res.status === 501 || data?.fallbackToClientSdk) {
+        auth.languageCode = "es";
+        await sendPasswordResetEmail(auth, cleanEmail);
+      }
+    } catch {
+      try {
+        auth.languageCode = "es";
+        await sendPasswordResetEmail(auth, cleanEmail);
+      } catch {}
+    }
 
     recordSystemLog({
       category: "SECURITY_AUTH",
@@ -624,7 +644,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       actorEmail: cleanEmail,
       actorName: cleanEmail,
       actorRole: "anonymous",
-      targetResource: "Recuperación de Credenciales",
+      targetResource: "Recuperación de Credenciales (Resend Custom HTML)",
       details: `Se procesó solicitud de enlace de contraseña para ${cleanEmail}.`,
     }).catch(() => {});
   };

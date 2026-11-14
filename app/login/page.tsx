@@ -73,22 +73,23 @@ export default function LoginPage() {
   } = useAuth();
   const router = useRouter();
 
-  // Cuando no hay sesión activa (al entrar o tras cerrar sesión), limpia todos los campos y reinicia el botón
+  // Limpia los estados de 2FA solo cuando no hay sesión activa ni un flujo de 2FA o recuperación en curso
   useEffect(() => {
-    if (!loading && !user) {
-      isHandlingManualAuthRef.current = false;
+    if (
+      !loading &&
+      !user &&
+      !isHandlingManualAuthRef.current &&
+      mode !== "2fa" &&
+      mode !== "forgot"
+    ) {
       setSubmitting(false);
-      setMode("login");
-      setEmail("");
-      setPassword("");
       setShowPassword(false);
       setPendingUserMeta(null);
       setOtpChallengeToken("");
       setDevOtpPreview(undefined);
       setOtpInput("");
-      setError("");
     }
-  }, [loading, user]);
+  }, [loading, user, mode]);
 
   // Redirección automática si el usuario ya tiene sesión completa con 2FA
   useEffect(() => {
@@ -736,7 +737,7 @@ export default function LoginPage() {
                         setError("");
                         setResetSentSuccess(false);
                       }}
-                      className="text-xs font-bold text-brand-red hover:underline py-1"
+                      className="text-xs font-bold text-brand-red hover:underline py-1 cursor-pointer"
                     >
                       ¿Olvidaste o aún no tienes contraseña?
                     </button>
@@ -793,7 +794,7 @@ export default function LoginPage() {
                   setResetSentSuccess(false);
                   setError("");
                 }}
-                className="inline-flex items-center gap-1.5 py-1 text-xs font-semibold text-brand-charcoal/75 hover:text-brand-charcoal transition-colors"
+                className="inline-flex items-center gap-1.5 py-1 text-xs font-semibold text-brand-charcoal/75 hover:text-brand-charcoal transition-colors cursor-pointer"
               >
                 <ArrowLeft className="h-4 w-4" />
                 <span>Volver al inicio de sesión</span>
@@ -857,7 +858,7 @@ export default function LoginPage() {
                   <button
                     type="submit"
                     disabled={submitting || isLocked}
-                    className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-charcoal px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg hover:bg-brand-red transition-all disabled:opacity-50"
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-charcoal px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg hover:bg-brand-red transition-all disabled:opacity-50 cursor-pointer"
                   >
                     <span>
                       {submitting
