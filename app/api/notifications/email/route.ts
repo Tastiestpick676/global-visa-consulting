@@ -1,8 +1,6 @@
 // app/api/notifications/email/route.ts
 import { NextResponse } from "next/server";
 import crypto from "crypto";
-import { getApps, initializeApp, cert } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
 
 const OTP_SECRET =
   process.env.OTP_HMAC_SECRET ||
@@ -14,24 +12,86 @@ const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutos estrictos
 const usedOtpTokens = new Map<string, number>();
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
-function getFirebaseAdminAuth() {
+/**
+ * Genera el enlace oficial de restablecimiento de contraseña de Firebase (oobCode)
+ * usando únicamente el módulo nativo `crypto` de Node.js y la API REST de Google,
+ * evitando el crash ERR_REQUIRE_ESM de firebase-admin / jwks-rsa / jose en Vercel.
+ */
+async function generateFirebasePasswordResetLinkRest(
+  targetEmail: string
+): Promise<string | null> {
   const rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   if (!rawKey) return null;
 
   try {
-    if (getApps().length === 0) {
-      const serviceAccount = JSON.parse(rawKey);
-      if (typeof serviceAccount.private_key === "string") {
-        serviceAccount.private_key = serviceAccount.private_key.replace(
-          /\\n/g,
-          "\n"
-        );
+    // Limpia comillas envolventes si existen
+    const cleanedRaw = rawKey.trim().replace(/^['"]|['"]$/g, "");
+    const serviceAccount = JSON.parse(cleanedRaw);
+
+    const clientEmail: string | undefined = serviceAccount.client_email;
+    const projectId: string | undefined = serviceAccount.project_id;
+    let privateKey: string | undefined = serviceAccount.private_key;
+
+    if (!clientEmail || !privateKey || !projectId) return null;
+    privateKey = privateKey.replace(/\\n/g, "\n");
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(
+      JSON.stringify({ alg: "RS256", typ: "JWT" })
+    ).toString("base64url");
+    const claimSet = Buffer.from(
+      JSON.stringify({
+        iss: clientEmail,
+        sub: clientEmail,
+        scope:
+          "https://www.googleapis.com/auth/identitytoolkit https://www.googleapis.com/auth/firebase",
+        aud: "https://oauth2.googleapis.com/token",
+        iat: nowSec,
+        exp: nowSec + 3600,
+      })
+    ).toString("base64url");
+
+    const unsignedJwt = `${header}.${claimSet}`;
+    const signer = crypto.createSign("RSA-SHA256");
+    signer.update(unsignedJwt);
+    const signature = signer.sign(privateKey, "base64url");
+    const assertion = `${unsignedJwt}.${signature}`;
+
+    // 1. Intercambiar el JWT firmado por un Access Token OAuth2 de Google
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion,
+      }),
+    });
+
+    if (!tokenRes.ok) return null;
+    const tokenData = await tokenRes.json();
+    const accessToken = tokenData?.access_token;
+    if (!accessToken) return null;
+
+    // 2. Solicitar el oobLink de PASSWORD_RESET sin que Firebase envíe su correo por defecto
+    const oobRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/projects/${projectId}/accounts:sendOobCode`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          requestType: "PASSWORD_RESET",
+          email: targetEmail,
+          returnOobLink: true,
+        }),
       }
-      initializeApp({
-        credential: cert(serviceAccount),
-      });
-    }
-    return getAuth();
+    );
+
+    if (!oobRes.ok) return null;
+    const oobData = await oobRes.json();
+    return oobData?.oobLink || null;
   } catch {
     return null;
   }
@@ -566,7 +626,7 @@ export async function POST(req: Request) {
 
     const reqOrigin = new URL(req.url).origin;
 
-    // 0. RESTABLECIMIENTO / ACTIVACIÓN DE CONTRASEÑA VÍA RESEND + FIREBASE ADMIN
+    // 0. RESTABLECIMIENTO / ACTIVACIÓN DE CONTRASEÑA VÍA RESEND + GOOGLE IDENTITY TOOLKIT REST
     if (action === "send_password_reset") {
       const targetEmail = String(body?.email || body?.to || "")
         .trim()
@@ -589,8 +649,7 @@ export async function POST(req: Request) {
         );
       }
 
-      const adminAuth = getFirebaseAdminAuth();
-      if (!adminAuth) {
+      if (!process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
         return NextResponse.json(
           {
             ok: false,
@@ -603,7 +662,12 @@ export async function POST(req: Request) {
 
       try {
         const firebaseResetLink =
-          await adminAuth.generatePasswordResetLink(targetEmail);
+          await generateFirebasePasswordResetLinkRest(targetEmail);
+
+        if (!firebaseResetLink) {
+          return NextResponse.json({ ok: true });
+        }
+
         const parsedFirebaseUrl = new URL(firebaseResetLink);
         const oobCode = parsedFirebaseUrl.searchParams.get("oobCode") || "";
 
@@ -752,7 +816,7 @@ export async function POST(req: Request) {
         deliveryMode: sendResult.mode,
       };
 
-      if (!process.env.RESEND_API_KEY || process.env.NODE_ENV === "development") {
+      if (!process.env.RESEND_API_KEY) {
         responsePayload.devOtpPreview = otpCode;
       }
 
