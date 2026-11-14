@@ -1,7 +1,11 @@
 // lib/firebase/config.ts
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { initializeFirestore, getFirestore } from "firebase/firestore";
+import {
+  initializeFirestore,
+  getFirestore,
+  Firestore,
+} from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
@@ -15,17 +19,18 @@ const firebaseConfig = {
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-// Evita los errores "WebChannelConnection RPC 'Listen' stream transport errored"
-let dbInstance;
+// Fuerza Long Polling estándar para eliminar definitivamente los cortes de stream
+// "WebChannelConnection RPC 'Listen' / 'Write' stream transport errored"
+let dbInstance: Firestore;
 try {
   dbInstance = initializeFirestore(app, {
-    experimentalAutoDetectLongPolling: true,
+    experimentalForceLongPolling: true,
   });
 } catch {
   dbInstance = getFirestore(app);
 }
 
 export const auth = getAuth(app);
-export const db = dbInstance;
+export const db: Firestore = dbInstance;
 export const storage = getStorage(app);
 export default app;

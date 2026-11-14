@@ -165,7 +165,7 @@ function ResetPasswordContent() {
               <button
                 type="button"
                 onClick={() => router.push("/login")}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs sm:text-sm font-semibold text-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all"
+                className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs sm:text-sm font-semibold text-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all cursor-pointer"
               >
                 <span>Iniciar Sesión Ahora</span>
                 <ArrowRight className="h-4 w-4" />
@@ -199,6 +199,19 @@ function ResetPasswordContent() {
               )}
 
               <form onSubmit={handleConfirmNewPassword} className="space-y-4">
+                {/* Campo intrínseco de correo electrónico para que el gestor de contraseñas del navegador asocie y guarde las credenciales */}
+                <input
+                  id="reset-account-email"
+                  name="email"
+                  type="email"
+                  autoComplete="username"
+                  value={accountEmail}
+                  readOnly
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  className="sr-only"
+                />
+
                 <div className="space-y-1.5">
                   <label
                     htmlFor="new-password"
@@ -209,7 +222,9 @@ function ResetPasswordContent() {
                   <div className="relative">
                     <input
                       id="new-password"
+                      name="new-password"
                       type={showPass ? "text" : "password"}
+                      autoComplete="new-password"
                       required
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
@@ -225,7 +240,7 @@ function ResetPasswordContent() {
                       title={
                         showPass ? "Ocultar contraseña" : "Mostrar contraseña"
                       }
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-brand-charcoal/65 hover:bg-brand-charcoal/5 hover:text-brand-charcoal transition-colors"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-brand-charcoal/65 hover:bg-brand-charcoal/5 hover:text-brand-charcoal transition-colors cursor-pointer"
                     >
                       {showPass ? (
                         <EyeOff className="h-4 w-4" />
@@ -245,7 +260,9 @@ function ResetPasswordContent() {
                   </label>
                   <input
                     id="confirm-password"
+                    name="confirm-password"
                     type={showPass ? "text" : "password"}
+                    autoComplete="new-password"
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
@@ -302,7 +319,7 @@ function ResetPasswordContent() {
                 <button
                   type="submit"
                   disabled={!isPasswordStrong || submitting}
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all disabled:opacity-50"
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   <Lock className="h-4 w-4" />
                   <span>

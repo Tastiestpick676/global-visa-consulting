@@ -31,6 +31,7 @@ import { getWhatsAppUrl } from "@/lib/constants";
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 5 * 60 * 1000;
+const OTP_LENGTH = 6;
 
 export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "forgot" | "2fa">("login");
@@ -42,7 +43,11 @@ export default function LoginPage() {
   const [devOtpPreview, setDevOtpPreview] = useState<string | undefined>(
     undefined
   );
-  const [otpInput, setOtpInput] = useState("");
+  const [otpDigits, setOtpDigits] = useState<string[]>(
+    Array(OTP_LENGTH).fill("")
+  );
+  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
   const [pendingUserMeta, setPendingUserMeta] = useState<{
     role: UserRole;
     fullName: string;
@@ -53,6 +58,8 @@ export default function LoginPage() {
   const [unregisteredAlert, setUnregisteredAlert] = useState(false);
   const [resetSentSuccess, setResetSentSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [resendingOtp, setResendingOtp] = useState(false);
+  const [resendFeedback, setResendFeedback] = useState("");
 
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
@@ -73,7 +80,37 @@ export default function LoginPage() {
   } = useAuth();
   const router = useRouter();
 
-  // Limpia los estados de 2FA solo cuando no hay sesión activa ni un flujo de 2FA o recuperación en curso
+  // Asegura que al entrar a /login (o regresar desde el navegador) siempre inicie en la vista base "login"
+  useEffect(() => {
+    setMode("login");
+    setResetSentSuccess(false);
+    setError("");
+
+    const handlePopState = () => {
+      if (!isHandlingManualAuthRef.current) {
+        setMode("login");
+        setResetSentSuccess(false);
+        setError("");
+      }
+    };
+
+    const handlePageShow = () => {
+      if (!isHandlingManualAuthRef.current) {
+        setMode("login");
+        setResetSentSuccess(false);
+        setError("");
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, []);
+
+  // Limpia los estados de 2FA cuando no hay sesión activa ni desafío en curso
   useEffect(() => {
     if (
       !loading &&
@@ -87,7 +124,8 @@ export default function LoginPage() {
       setPendingUserMeta(null);
       setOtpChallengeToken("");
       setDevOtpPreview(undefined);
-      setOtpInput("");
+      setOtpDigits(Array(OTP_LENGTH).fill(""));
+      setResendFeedback("");
     }
   }, [loading, user, mode]);
 
@@ -190,19 +228,56 @@ export default function LoginPage() {
 
   const isLocked = Boolean(lockoutUntil && lockoutUntil > Date.now());
 
-  const dispatchTwoFactorOtp = async (meta: {
-    role: UserRole;
-    fullName: string;
-    email: string;
-  }) => {
-    setOtpInput("");
+  const dispatchTwoFactorOtp = async (
+    meta: {
+      role: UserRole;
+      fullName: string;
+      email: string;
+    },
+    isManualResend = false
+  ) => {
+    setError("");
+    setResendFeedback("");
+    setOtpDigits(Array(OTP_LENGTH).fill(""));
     setDevOtpPreview(undefined);
-    const res = await requestServerTwoFactorOtp(meta);
-    if (res.otpChallengeToken) {
-      setOtpChallengeToken(res.otpChallengeToken);
+
+    if (isManualResend) {
+      setResendingOtp(true);
     }
-    if (res.devOtpPreview) {
-      setDevOtpPreview(res.devOtpPreview);
+
+    try {
+      const res = await requestServerTwoFactorOtp(meta);
+      if (!res.ok) {
+        setError(
+          res.error ||
+            "No se pudo enviar el código de verificación. Intenta reenviarlo."
+        );
+        return;
+      }
+
+      if (res.otpChallengeToken) {
+        setOtpChallengeToken(res.otpChallengeToken);
+      }
+      if (res.devOtpPreview) {
+        setDevOtpPreview(res.devOtpPreview);
+      }
+
+      if (isManualResend) {
+        setResendFeedback(
+          "¡Nuevo código de 6 dígitos enviado a tu correo electrónico!"
+        );
+        setTimeout(() => {
+          setResendFeedback("");
+        }, 4500);
+      }
+
+      setTimeout(() => {
+        otpInputRefs.current[0]?.focus();
+      }, 60);
+    } finally {
+      if (isManualResend) {
+        setResendingOtp(false);
+      }
     }
   };
 
@@ -228,7 +303,7 @@ export default function LoginPage() {
       setMode("2fa");
       setSubmitting(false);
 
-      await dispatchTwoFactorOtp(meta);
+      await dispatchTwoFactorOtp(meta, false);
     } catch (err: any) {
       isHandlingManualAuthRef.current = false;
       if (err?.message === "UNREGISTERED_USER") {
@@ -255,29 +330,107 @@ export default function LoginPage() {
     }
   };
 
+  const handleDigitChange = (index: number, rawValue: string) => {
+    const clean = rawValue.replace(/\D/g, "");
+    if (!clean) {
+      const next = [...otpDigits];
+      next[index] = "";
+      setOtpDigits(next);
+      return;
+    }
+
+    // Si el usuario o autocompletado inserta varios dígitos de golpe
+    if (clean.length > 1) {
+      const chars = clean.slice(0, OTP_LENGTH).split("");
+      const next = [...otpDigits];
+      chars.forEach((ch, idx) => {
+        if (index + idx < OTP_LENGTH) {
+          next[index + idx] = ch;
+        }
+      });
+      setOtpDigits(next);
+      const focusIdx = Math.min(index + chars.length, OTP_LENGTH - 1);
+      otpInputRefs.current[focusIdx]?.focus();
+      return;
+    }
+
+    const next = [...otpDigits];
+    next[index] = clean;
+    setOtpDigits(next);
+
+    if (index < OTP_LENGTH - 1) {
+      otpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleDigitKeyDown = (
+    index: number,
+    e: React.KeyboardEvent<HTMLInputElement>
+  ) => {
+    if (e.key === "Backspace") {
+      if (otpDigits[index]) {
+        const next = [...otpDigits];
+        next[index] = "";
+        setOtpDigits(next);
+      } else if (index > 0) {
+        const next = [...otpDigits];
+        next[index - 1] = "";
+        setOtpDigits(next);
+        otpInputRefs.current[index - 1]?.focus();
+      }
+      e.preventDefault();
+    } else if (e.key === "ArrowLeft" && index > 0) {
+      otpInputRefs.current[index - 1]?.focus();
+      e.preventDefault();
+    } else if (e.key === "ArrowRight" && index < OTP_LENGTH - 1) {
+      otpInputRefs.current[index + 1]?.focus();
+      e.preventDefault();
+    }
+  };
+
+  const handleDigitPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasted = e.clipboardData
+      .getData("text")
+      .replace(/\D/g, "")
+      .slice(0, OTP_LENGTH);
+    if (!pasted) return;
+
+    const next = Array(OTP_LENGTH).fill("");
+    pasted.split("").forEach((ch, i) => {
+      next[i] = ch;
+    });
+    setOtpDigits(next);
+
+    const targetFocus = Math.min(pasted.length, OTP_LENGTH - 1);
+    otpInputRefs.current[targetFocus]?.focus();
+  };
+
+  const cleanedOtpDigits = otpDigits.join("");
+
   const handleVerifyTwoFactorOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLocked || !pendingUserMeta) return;
 
-    const cleanCode = otpInput.replace(/\D/g, "");
-    if (cleanCode.length < 6) {
+    if (cleanedOtpDigits.length < OTP_LENGTH) {
       setError("Por favor ingresa los 6 dígitos del código de verificación.");
       return;
     }
 
     if (!otpChallengeToken) {
       setError(
-        "Generando desafío criptográfico... espera un segundo o haz clic en 'Reenviar nuevo código'."
+        "El token de desafío no está activo. Haz clic en 'Reenviar nuevo código' para recibir uno nuevo."
       );
       return;
     }
 
     setError("");
+    setResendFeedback("");
     setSubmitting(true);
 
     try {
       const verification = await verifyServerTwoFactorOtp({
-        otpGuess: cleanCode,
+        otpGuess: cleanedOtpDigits,
         otpChallengeToken,
       });
 
@@ -323,13 +476,12 @@ export default function LoginPage() {
           ? "/dashboard/admin?tab=gobernanza"
           : "/dashboard";
 
-      // Limpiar estados del formulario antes de salir para que el caché de rutas nunca guarde "Verificando..."
       isHandlingManualAuthRef.current = false;
       setSubmitting(false);
       setEmail("");
       setPassword("");
       setShowPassword(false);
-      setOtpInput("");
+      setOtpDigits(Array(OTP_LENGTH).fill(""));
       setOtpChallengeToken("");
       setPendingUserMeta(null);
       setMode("login");
@@ -345,8 +497,10 @@ export default function LoginPage() {
     setPendingUserMeta(null);
     setOtpChallengeToken("");
     setDevOtpPreview(undefined);
-    setOtpInput("");
+    setOtpDigits(Array(OTP_LENGTH).fill(""));
     setPassword("");
+    setError("");
+    setResendFeedback("");
     setSubmitting(false);
     setMode("login");
     await signOut();
@@ -408,8 +562,6 @@ export default function LoginPage() {
     const s = secs % 60;
     return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
-
-  const cleanedOtpDigits = otpInput.replace(/\D/g, "");
 
   return (
     <div className="min-h-screen bg-brand-white grid grid-cols-1 lg:grid-cols-12 font-sans">
@@ -485,7 +637,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={handleCancelTwoFactor}
-                className="inline-flex items-center gap-1.5 py-1 text-xs font-semibold text-brand-charcoal/75 hover:text-brand-charcoal transition-colors"
+                className="inline-flex items-center gap-1.5 py-1 text-xs font-semibold text-brand-charcoal/75 hover:text-brand-charcoal transition-colors cursor-pointer"
               >
                 <ArrowLeft className="h-4 w-4" />
                 <span>Cancelar y volver al login</span>
@@ -518,8 +670,10 @@ export default function LoginPage() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setOtpInput(devOtpPreview)}
-                      className="text-[11px] font-bold text-emerald-400 hover:underline"
+                      onClick={() =>
+                        setOtpDigits(devOtpPreview.slice(0, 6).split(""))
+                      }
+                      className="text-[11px] font-bold text-emerald-400 hover:underline cursor-pointer"
                     >
                       Autocompletar código
                     </button>
@@ -533,6 +687,16 @@ export default function LoginPage() {
                 </div>
               )}
 
+              {resendFeedback && !error && (
+                <div
+                  role="status"
+                  className="flex items-center gap-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3.5 text-xs font-semibold text-emerald-800"
+                >
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>{resendFeedback}</span>
+                </div>
+              )}
+
               {error && !isLocked && (
                 <div
                   role="alert"
@@ -543,47 +707,49 @@ export default function LoginPage() {
                 </div>
               )}
 
-              <form onSubmit={handleVerifyTwoFactorOtp} className="space-y-4">
-                <div className="space-y-1.5">
+              <form onSubmit={handleVerifyTwoFactorOtp} className="space-y-5">
+                <div className="space-y-2">
                   <label
-                    htmlFor="otp-code-input"
+                    htmlFor="otp-digit-0"
                     className="block text-xs font-semibold text-brand-charcoal"
                   >
                     Código de 6 dígitos
                   </label>
-                  <input
-                    id="otp-code-input"
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    required
-                    autoFocus
-                    disabled={isLocked}
-                    value={cleanedOtpDigits}
-                    onChange={(e) => {
-                      const digitsOnly = e.target.value
-                        .replace(/\D/g, "")
-                        .slice(0, 6);
-                      setOtpInput(digitsOnly);
-                    }}
-                    onPaste={(e) => {
-                      e.preventDefault();
-                      const pasted = e.clipboardData
-                        .getData("text")
-                        .replace(/\D/g, "")
-                        .slice(0, 6);
-                      setOtpInput(pasted);
-                    }}
-                    placeholder="000000"
-                    className="h-14 w-full rounded-2xl bg-brand-platinum/60 border-2 border-brand-charcoal/15 px-4 text-center font-mono text-2xl font-extrabold tracking-[0.35em] text-brand-charcoal focus:bg-brand-white focus:border-brand-red focus:outline-none"
-                  />
+                  <div className="grid grid-cols-6 gap-2 sm:gap-3">
+                    {otpDigits.map((digit, idx) => (
+                      <input
+                        key={idx}
+                        id={`otp-digit-${idx}`}
+                        ref={(el) => {
+                          otpInputRefs.current[idx] = el;
+                        }}
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete={idx === 0 ? "one-time-code" : "off"}
+                        maxLength={6}
+                        autoFocus={idx === 0}
+                        disabled={isLocked || submitting || resendingOtp}
+                        value={digit}
+                        onChange={(e) => handleDigitChange(idx, e.target.value)}
+                        onKeyDown={(e) => handleDigitKeyDown(idx, e)}
+                        onPaste={handleDigitPaste}
+                        aria-label={`Dígito ${idx + 1} del código de verificación`}
+                        placeholder="0"
+                        className={`h-14 w-full rounded-2xl border-2 text-center font-mono text-xl sm:text-2xl font-extrabold text-brand-charcoal placeholder:text-brand-charcoal/25 transition-all focus:bg-brand-white focus:border-brand-red focus:outline-none disabled:opacity-50 ${
+                          digit
+                            ? "bg-brand-white border-brand-red shadow-2xs"
+                            : "bg-brand-platinum/60 border-brand-charcoal/15"
+                        }`}
+                      />
+                    ))}
+                  </div>
                 </div>
 
                 <button
                   type="submit"
-                  disabled={submitting || isLocked}
+                  disabled={submitting || resendingOtp || isLocked}
                   className={`w-full inline-flex items-center justify-center gap-2 rounded-full px-6 py-4 text-xs sm:text-sm font-bold text-brand-white shadow-lg transition-all cursor-pointer ${
-                    cleanedOtpDigits.length === 6
+                    cleanedOtpDigits.length === OTP_LENGTH
                       ? "bg-brand-red shadow-brand-red/25 hover:bg-brand-charcoal"
                       : "bg-brand-charcoal hover:bg-brand-red"
                   } disabled:opacity-50`}
@@ -603,12 +769,20 @@ export default function LoginPage() {
                 </span>
                 <button
                   type="button"
-                  disabled={submitting || isLocked}
-                  onClick={() => dispatchTwoFactorOtp(pendingUserMeta)}
-                  className="inline-flex items-center gap-1.5 font-bold text-brand-red hover:underline"
+                  disabled={submitting || resendingOtp || isLocked}
+                  onClick={() => dispatchTwoFactorOtp(pendingUserMeta, true)}
+                  className="inline-flex items-center gap-1.5 font-bold text-brand-red hover:underline disabled:opacity-50 cursor-pointer"
                 >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  <span>Reenviar nuevo código</span>
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${
+                      resendingOtp ? "animate-spin" : ""
+                    }`}
+                  />
+                  <span>
+                    {resendingOtp
+                      ? "Enviando nuevo código..."
+                      : "Reenviar nuevo código"}
+                  </span>
                 </button>
               </div>
             </div>
@@ -666,7 +840,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={handleGoogleLogin}
                 disabled={submitting || isLocked}
-                className="w-full flex items-center justify-center gap-3 rounded-full border border-brand-charcoal/15 bg-brand-white px-6 py-3.5 text-xs sm:text-sm font-semibold text-brand-charcoal shadow-2xs hover:bg-brand-platinum/60 transition-all disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-3 rounded-full border border-brand-charcoal/15 bg-brand-white px-6 py-3.5 text-xs sm:text-sm font-semibold text-brand-charcoal shadow-2xs hover:bg-brand-platinum/60 transition-all disabled:opacity-50 cursor-pointer"
               >
                 <svg
                   className="h-4 w-4"
@@ -711,9 +885,10 @@ export default function LoginPage() {
                   </label>
                   <input
                     id="login-email"
+                    name="email"
                     type="email"
                     required
-                    autoComplete="email"
+                    autoComplete="username"
                     disabled={isLocked}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -745,6 +920,7 @@ export default function LoginPage() {
                   <div className="relative">
                     <input
                       id="login-password"
+                      name="password"
                       type={showPassword ? "text" : "password"}
                       required
                       autoComplete="current-password"
@@ -762,7 +938,7 @@ export default function LoginPage() {
                           ? "Ocultar contraseña"
                           : "Mostrar contraseña"
                       }
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-brand-charcoal/65 hover:bg-brand-charcoal/5 hover:text-brand-charcoal transition-colors"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-brand-charcoal/65 hover:bg-brand-charcoal/5 hover:text-brand-charcoal transition-colors cursor-pointer"
                     >
                       {showPassword ? (
                         <EyeOff className="h-4 w-4" />
@@ -776,7 +952,7 @@ export default function LoginPage() {
                 <button
                   type="submit"
                   disabled={submitting || isLocked}
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all disabled:opacity-50"
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-4 text-xs sm:text-sm font-semibold text-brand-white shadow-lg shadow-brand-red/25 hover:bg-brand-red/90 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   <span>
                     {submitting ? "Verificando..." : "Ingresar a mi Portal"}
@@ -844,6 +1020,7 @@ export default function LoginPage() {
                     </label>
                     <input
                       id="reset-email"
+                      name="email"
                       type="email"
                       required
                       autoComplete="email"

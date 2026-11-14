@@ -1,5 +1,6 @@
 // lib/firebase/db.ts
 import { auth, db } from "./config";
+import { onAuthStateChanged, User } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import {
   AppNotification,
@@ -506,15 +507,50 @@ export async function recordSystemLog(params: {
   } catch {}
 }
 
+/**
+ * Espera de forma segura al usuario activo en Firebase Auth si está hidratándose
+ * después de signIn, garantizando que el header Authorization: Bearer <idToken>
+ * siempre viaje en las peticiones a /api/notifications/email.
+ */
+async function resolveAuthenticatedUser(timeoutMs = 2500): Promise<User | null> {
+  if (auth.currentUser) return auth.currentUser;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        unsub();
+        resolve(auth.currentUser);
+      }
+    }, timeoutMs);
+
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (u && !settled) {
+        settled = true;
+        clearTimeout(timer);
+        unsub();
+        resolve(u);
+      }
+    });
+  });
+}
+
 async function getBearerAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (auth.currentUser) {
+  const currentUser = await resolveAuthenticatedUser();
+  if (currentUser) {
     try {
-      const idToken = await auth.currentUser.getIdToken();
+      const idToken = await currentUser.getIdToken();
       headers["Authorization"] = `Bearer ${idToken}`;
-    } catch {}
+    } catch {
+      try {
+        const refreshedToken = await currentUser.getIdToken(true);
+        headers["Authorization"] = `Bearer ${refreshedToken}`;
+      } catch {}
+    }
   }
   return headers;
 }
@@ -539,7 +575,7 @@ export async function sendTransactionalEmail(params: {
 
     const headers = await getBearerAuthHeaders();
     let ok = false;
-    let simulated = true;
+    let simulated = false;
 
     try {
       const response = await fetch("/api/notifications/email", {
@@ -573,7 +609,7 @@ export async function sendTransactionalEmail(params: {
       actorRole: params.actorRole || "admin",
       targetResource: params.to,
       details: `${params.subject} (${
-        simulated ? "Notificación registrada en SIEM" : "Enviado vía SMTP/Resend"
+        !ok ? "Notificación registrada en SIEM" : "Enviado vía SMTP/Resend"
       }).`,
     });
 
@@ -591,6 +627,7 @@ export async function requestServerTwoFactorOtp(params: {
   ok: boolean;
   otpChallengeToken?: string;
   devOtpPreview?: string;
+  error?: string;
 }> {
   try {
     const headers = await getBearerAuthHeaders();
@@ -614,17 +651,28 @@ export async function requestServerTwoFactorOtp(params: {
       actorName: params.fullName,
       actorRole: params.role,
       targetResource: "Motor HMAC-SHA256 2FA",
-      details:
-        "El servidor generó un código OTP de 6 dígitos con firma HMAC y lo envió al correo del titular.",
+      details: data.ok
+        ? "El servidor generó un código OTP de 6 dígitos con firma HMAC y lo envió al correo del titular."
+        : data.error || "Fallo al despachar el código OTP 2FA.",
     });
 
+    if (!res.ok || !data.ok) {
+      return {
+        ok: false,
+        error: data.error || "No se pudo enviar el código de verificación.",
+      };
+    }
+
     return {
-      ok: Boolean(data.ok),
+      ok: true,
       otpChallengeToken: data.otpChallengeToken,
       devOtpPreview: data.devOtpPreview,
     };
   } catch {
-    return { ok: false };
+    return {
+      ok: false,
+      error: "Error de conexión al generar el código de verificación.",
+    };
   }
 }
 

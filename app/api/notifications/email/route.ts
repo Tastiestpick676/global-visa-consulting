@@ -13,9 +13,16 @@ const usedOtpTokens = new Map<string, number>();
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
 /**
+ * Deriva una clave simétrica de 32 bytes (256 bits) a partir de OTP_SECRET
+ * para cifrar el token de desafío con AES-256-GCM y no exponer metadatos en el cliente.
+ */
+function getCipherKey(): Buffer {
+  return crypto.createHash("sha256").update(OTP_SECRET).digest();
+}
+
+/**
  * Genera el enlace oficial de restablecimiento de contraseña de Firebase (oobCode)
- * usando únicamente el módulo nativo `crypto` de Node.js y la API REST de Google,
- * evitando el crash ERR_REQUIRE_ESM de firebase-admin / jwks-rsa / jose en Vercel.
+ * usando únicamente el módulo nativo `crypto` de Node.js y la API REST de Google.
  */
 async function generateFirebasePasswordResetLinkRest(
   targetEmail: string
@@ -24,7 +31,6 @@ async function generateFirebasePasswordResetLinkRest(
   if (!rawKey) return null;
 
   try {
-    // Limpia comillas envolventes si existen
     const cleanedRaw = rawKey.trim().replace(/^['"]|['"]$/g, "");
     const serviceAccount = JSON.parse(cleanedRaw);
 
@@ -57,7 +63,6 @@ async function generateFirebasePasswordResetLinkRest(
     const signature = signer.sign(privateKey, "base64url");
     const assertion = `${unsignedJwt}.${signature}`;
 
-    // 1. Intercambiar el JWT firmado por un Access Token OAuth2 de Google
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -72,7 +77,6 @@ async function generateFirebasePasswordResetLinkRest(
     const accessToken = tokenData?.access_token;
     if (!accessToken) return null;
 
-    // 2. Solicitar el oobLink de PASSWORD_RESET sin que Firebase envíe su correo por defecto
     const oobRes = await fetch(
       `https://identitytoolkit.googleapis.com/v1/projects/${projectId}/accounts:sendOobCode`,
       {
@@ -187,6 +191,10 @@ function sanitizeCtaUrl(
   }
 }
 
+/**
+ * Crea un token de desafío 2FA cifrado con AES-256-GCM (opaco ante el navegador)
+ * para que ningún campo interno (uid, email, expiresAt, nonce) sea visible al inspeccionar el payload.
+ */
 function createSignedOtpToken(uid: string, email: string, otpCode: string) {
   const expiresAt = Date.now() + OTP_TTL_MS;
   const nonce = crypto.randomBytes(12).toString("hex");
@@ -196,17 +204,26 @@ function createSignedOtpToken(uid: string, email: string, otpCode: string) {
     .update(payload)
     .digest("hex");
 
-  const token = Buffer.from(
-    JSON.stringify({
-      uid,
-      email: email.toLowerCase(),
-      expiresAt,
-      nonce,
-      signature,
-    })
-  ).toString("base64url");
+  const plaintext = JSON.stringify({
+    u: uid,
+    e: email.toLowerCase(),
+    x: expiresAt,
+    n: nonce,
+    s: signature,
+  });
 
-  return { token, expiresAt };
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", getCipherKey(), iv);
+  const encrypted = Buffer.concat([
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
+
+  // Formato opaco: Buffer binario (iv [12] + authTag [16] + ciphertext) en base64url
+  const packed = Buffer.concat([iv, authTag, encrypted]).toString("base64url");
+
+  return { token: packed };
 }
 
 function verifySignedOtpToken(
@@ -228,65 +245,44 @@ function verifySignedOtpToken(
       };
     }
 
-    // Soporte híbrido: acepta tanto el token nuevo (base64url JSON) como el formato viejo (expiresAt.nonce.signature)
-    if (token.includes(".")) {
-      if (usedOtpTokens.has(token)) {
-        return {
-          valid: false,
-          reason: "Este código ya fue utilizado. Solicita uno nuevo.",
-        };
-      }
-      const parts = token.split(".");
-      if (parts.length !== 3) {
+    let tokenUid = "";
+    let tokenEmail = "";
+    let expiresAt = 0;
+    let nonce = "";
+    let signature = "";
+
+    const rawBuf = Buffer.from(token, "base64url");
+
+    // Desempacar y descifrar AES-256-GCM
+    if (rawBuf.length > 28) {
+      try {
+        const iv = rawBuf.subarray(0, 12);
+        const authTag = rawBuf.subarray(12, 28);
+        const ciphertext = rawBuf.subarray(28);
+
+        const decipher = crypto.createDecipheriv(
+          "aes-256-gcm",
+          getCipherKey(),
+          iv
+        );
+        decipher.setAuthTag(authTag);
+        const decrypted = Buffer.concat([
+          decipher.update(ciphertext),
+          decipher.final(),
+        ]).toString("utf8");
+
+        const parsed = JSON.parse(decrypted);
+        tokenUid = String(parsed.u || "");
+        tokenEmail = String(parsed.e || "");
+        expiresAt = Number(parsed.x || 0);
+        nonce = String(parsed.n || "");
+        signature = String(parsed.s || "");
+      } catch {
         return { valid: false, reason: "Token de desafío inválido." };
       }
-      const [expiresAtStr, nonce, signature] = parts;
-      const expiresAt = Number(expiresAtStr);
-      if (!expiresAt || now > expiresAt) {
-        return {
-          valid: false,
-          reason: "El código de verificación ha expirado (máx. 5 min).",
-        };
-      }
-      const expectedData = `${email.toLowerCase()}:${otpGuess.trim()}:${expiresAt}:${nonce}`;
-      const expectedSig = crypto
-        .createHmac("sha256", OTP_SECRET)
-        .update(expectedData)
-        .digest("hex");
-
-      const sigBufA = Buffer.from(signature, "hex");
-      const sigBufB = Buffer.from(expectedSig, "hex");
-      if (
-        sigBufA.length !== sigBufB.length ||
-        !crypto.timingSafeEqual(sigBufA, sigBufB)
-      ) {
-        return {
-          valid: false,
-          reason: "El código de 6 dígitos es incorrecto.",
-        };
-      }
-      usedOtpTokens.set(token, expiresAt + 60_000);
-      const twoFactorProof = crypto
-        .createHmac("sha256", OTP_SECRET)
-        .update(`verified|${uid}|${nonce}|${now}`)
-        .digest("hex");
-      return { valid: true, twoFactorProof };
-    }
-
-    const decoded = JSON.parse(
-      Buffer.from(token, "base64url").toString("utf8")
-    );
-    if (!decoded || typeof decoded !== "object") {
+    } else {
       return { valid: false, reason: "Token de desafío inválido." };
     }
-
-    const {
-      uid: tokenUid,
-      email: tokenEmail,
-      expiresAt,
-      nonce,
-      signature,
-    } = decoded;
 
     if (usedOtpTokens.has(nonce)) {
       return {
@@ -302,7 +298,7 @@ function verifySignedOtpToken(
       };
     }
 
-    if (now > Number(expiresAt)) {
+    if (now > expiresAt) {
       return {
         valid: false,
         reason: "El código de verificación ha expirado (máx. 5 min).",
@@ -315,7 +311,7 @@ function verifySignedOtpToken(
       .update(expectedPayload)
       .digest("hex");
 
-    const sigBufA = Buffer.from(String(signature), "hex");
+    const sigBufA = Buffer.from(signature, "hex");
     const sigBufB = Buffer.from(expectedSig, "hex");
 
     if (
@@ -329,10 +325,8 @@ function verifySignedOtpToken(
       };
     }
 
-    // Marcar nonce como consumido (Anti-Replay)
-    usedOtpTokens.set(nonce, Number(expiresAt) + 60_000);
+    usedOtpTokens.set(nonce, expiresAt + 60_000);
 
-    // Emitir prueba criptográfica de 64 caracteres para Firestore Rules
     const twoFactorProof = crypto
       .createHmac("sha256", OTP_SECRET)
       .update(`verified|${uid}|${nonce}|${now}`)
@@ -525,7 +519,6 @@ async function sendViaResend(params: {
 }) {
   const apiKey = process.env.RESEND_API_KEY?.trim().replace(/^['"]|['"]$/g, "");
 
-  // Limpia comillas accidentales en Vercel y usa tu dominio oficial por defecto
   const rawFrom = process.env.RESEND_FROM_EMAIL?.trim().replace(
     /^['"]|['"]$/g,
     ""
@@ -565,7 +558,6 @@ async function sendViaResend(params: {
   const resendReason =
     errBody?.message || errBody?.error || `HTTP ${primaryRes.status}`;
 
-  // Si Resend rechaza el envío directo, reenvía al correo admin mostrando la causa exacta de Resend
   if (
     (primaryRes.status === 403 ||
       primaryRes.status === 422 ||
@@ -627,7 +619,6 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    // Normalizamos la acción a minúsculas y mapeamos "send_email" -> "send_notification"
     const rawAction = String(
       body?.action || body?.mode || "send_notification"
     )
@@ -667,7 +658,7 @@ export async function POST(req: Request) {
           {
             ok: false,
             fallbackToClientSdk: true,
-            error: "FIREBASE_SERVICE_ACCOUNT_KEY no configurada.",
+            error: "Servicio de correo no configurado.",
           },
           { status: 501 }
         );
@@ -768,7 +759,6 @@ export async function POST(req: Request) {
         return NextResponse.json(
           {
             ok: false,
-            valid: false,
             verified: false,
             error:
               check.reason || "Código de verificación inválido o expirado.",
@@ -779,13 +769,12 @@ export async function POST(req: Request) {
 
       return NextResponse.json({
         ok: true,
-        valid: true,
         verified: true,
         twoFactorProof: check.twoFactorProof,
       });
     }
 
-    // 2. GENERAR Y ENVIAR DESAFÍO 2FA OTP SERVER-SIDE
+    // 2. GENERAR Y ENVIAR DESAFÍO 2FA OTP SERVER-SIDE (RESPUESTA MÍNIMA Y OPACA)
     if (ALLOWED_OTP_REQUEST_ACTIONS.has(action)) {
       const recipientName = String(
         body?.clientName ||
@@ -797,7 +786,7 @@ export async function POST(req: Request) {
 
       const otpCode = String(crypto.randomInt(100000, 999999));
 
-      const { token: otpChallengeToken, expiresAt } = createSignedOtpToken(
+      const { token: otpChallengeToken } = createSignedOtpToken(
         verifiedCaller.uid,
         verifiedCaller.email,
         otpCode
@@ -806,7 +795,7 @@ export async function POST(req: Request) {
       const subject = `Código de acceso: ${otpCode} — Global Visa Consulting`;
       const html = buildOtpEmailHtml({ recipientName, otpCode });
 
-      const sendResult = await sendViaResend({
+      await sendViaResend({
         to: verifiedCaller.email,
         subject,
         html,
@@ -820,13 +809,7 @@ export async function POST(req: Request) {
 
       const responsePayload: Record<string, unknown> = {
         ok: true,
-        simulated: !process.env.RESEND_API_KEY,
-        sandboxRedirected: sendResult.mode === "sandbox-fallback",
         otpChallengeToken,
-        challengeToken: otpChallengeToken,
-        token: otpChallengeToken,
-        expiresAt,
-        deliveryMode: sendResult.mode,
       };
 
       if (!process.env.RESEND_API_KEY) {
@@ -836,7 +819,7 @@ export async function POST(req: Request) {
       return NextResponse.json(responsePayload);
     }
 
-    // 3. NOTIFICACIÓN TRANSACCIONAL (CON VALORES POR DEFECTO RETROCOMPATIBLES)
+    // 3. NOTIFICACIÓN TRANSACCIONAL (RESPUESTA MÍNIMA)
     if (action === "send_notification") {
       const to = String(body?.to || verifiedCaller.email || "")
         .trim()
@@ -912,11 +895,7 @@ export async function POST(req: Request) {
       });
 
       return NextResponse.json({
-        ok: true,
-        simulated: !process.env.RESEND_API_KEY,
-        sandboxRedirected: sendResult.mode === "sandbox-fallback",
-        delivered: sendResult.delivered,
-        mode: sendResult.mode,
+        ok: sendResult.delivered,
       });
     }
 
