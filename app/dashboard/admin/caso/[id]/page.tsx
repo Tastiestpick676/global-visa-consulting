@@ -88,7 +88,6 @@ function AdminCaseWorkspaceContent() {
   const [staffList, setStaffList] = useState<UserProfile[]>([]);
   const [loadingCase, setLoadingCase] = useState(true);
 
-  // Estado de enmascaramiento y datos descargados bajo demanda
   const [piiRevealed, setPiiRevealed] = useState(false);
   const [unmaskedVaultPii, setUnmaskedVaultPii] = useState<{
     nationalId?: string;
@@ -108,7 +107,6 @@ function AdminCaseWorkspaceContent() {
   const [reviewingDocId, setReviewingDocId] = useState<string | null>(null);
   const [reviewActionType, setReviewActionType] = useState<"verified" | "rejected" | null>(null);
 
-  // Estados de doble confirmación y feedback para eliminación de archivos
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [confirmingDeleteDocId, setConfirmingDeleteDocId] = useState<string | null>(null);
 
@@ -222,8 +220,7 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      const updatedApp = {
-        ...appData,
+      await updateDoc(doc(db, "applications", appData.id), {
         assignedAdvisorId: selectedAdvisor.uid,
         assignedAdvisorName: cleanAdvName,
         assignedAdvisorEmail: selectedAdvisor.email,
@@ -231,10 +228,7 @@ function AdminCaseWorkspaceContent() {
         assignedAdvisorBookingUrl: selectedAdvisor.bookingUrl || "",
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      };
-
-      await updateDoc(doc(db, "applications", appData.id), updatedApp);
-      setAppData(updatedApp);
+      });
 
       await recordSystemLog({
         category: "CASE_TRACEABILITY",
@@ -250,6 +244,7 @@ function AdminCaseWorkspaceContent() {
       });
 
       setFeedback(`Especialista ${cleanAdvName} asignado correctamente.`);
+      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo asignar el especialista.");
     }
@@ -272,8 +267,7 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      const updatedApp = {
-        ...appData,
+      await updateDoc(doc(db, "applications", appData.id), {
         status: nextStatus,
         progressPercentage:
           nextStatus === "approved" || nextStatus === "rejected"
@@ -281,10 +275,7 @@ function AdminCaseWorkspaceContent() {
             : appData.progressPercentage,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      };
-
-      await updateDoc(doc(db, "applications", appData.id), updatedApp);
-      setAppData(updatedApp);
+      });
 
       await recordSystemLog({
         category: "CASE_TRACEABILITY",
@@ -313,6 +304,7 @@ function AdminCaseWorkspaceContent() {
       setFeedback(
         `Estatus actualizado a ${nextStatus.toUpperCase()} y notificado.`
       );
+      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo cambiar el estatus del expediente.");
     }
@@ -378,18 +370,14 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      const updatedApp = {
-        ...appData,
+      await updateDoc(doc(db, "applications", appData.id), {
         documents: updatedDocs,
         progressPercentage: nextMetrics.progressPercentage,
         currentStep: nextMetrics.currentStep,
         status: nextMetrics.autoStatus,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      };
-
-      await updateDoc(doc(db, "applications", appData.id), updatedApp);
-      setAppData(updatedApp);
+      });
 
       await recordSystemLog({
         category: "PII_VAULT",
@@ -443,6 +431,7 @@ function AdminCaseWorkspaceContent() {
       }
 
       setFeedback(`Dictamen guardado y notificado al cliente.`);
+      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo guardar el dictamen del documento.");
     } finally {
@@ -497,18 +486,14 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      const updatedApp = {
-        ...appData,
+      await updateDoc(doc(db, "applications", appData.id), {
         documents: updatedDocs,
         progressPercentage: nextMetrics.progressPercentage,
         currentStep: nextMetrics.currentStep,
         status: nextMetrics.autoStatus,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      };
-
-      await updateDoc(doc(db, "applications", appData.id), updatedApp);
-      setAppData(updatedApp);
+      });
 
       await recordSystemLog({
         category: "PII_VAULT",
@@ -524,6 +509,7 @@ function AdminCaseWorkspaceContent() {
       });
 
       setFeedback(`Archivo de "${docItem.title}" eliminado correctamente.`);
+      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo eliminar el archivo seleccionado.");
     } finally {
@@ -555,17 +541,14 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      const updatedApp = {
-        ...appData,
+      await updateDoc(doc(db, "applications", appData.id), {
         officialDeliverables: updatedDelivs,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      };
-
-      await updateDoc(doc(db, "applications", appData.id), updatedApp);
-      setAppData(updatedApp);
+      });
 
       setFeedback(`Entregable "${delivItem.label}" eliminado correctamente.`);
+      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo eliminar el entregable.");
     }
@@ -621,18 +604,14 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      const updatedApp = {
-        ...appData,
+      await updateDoc(doc(db, "applications", appData.id), {
         officialDeliverables: updatedDeliverables,
         progressPercentage: nextMetrics.progressPercentage,
         currentStep: nextMetrics.currentStep,
         status: nextMetrics.autoStatus,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      };
-
-      await updateDoc(doc(db, "applications", appData.id), updatedApp);
-      setAppData(updatedApp);
+      });
 
       await recordSystemLog({
         category: "PII_VAULT",
@@ -670,6 +649,7 @@ function AdminCaseWorkspaceContent() {
       setDelivLabel("");
       setDelivFile(null);
       setFeedback(`¡Entregable "${newDeliv.label}" emitido y notificado!`);
+      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo subir el entregable oficial.");
     } finally {
@@ -714,15 +694,11 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      const updatedApp = {
-        ...appData,
+      await updateDoc(doc(db, "applications", appData.id), {
         meetings: updatedMeetings,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      };
-
-      await updateDoc(doc(db, "applications", appData.id), updatedApp);
-      setAppData(updatedApp);
+      });
 
       await recordSystemLog({
         category: "CASE_TRACEABILITY",
@@ -774,6 +750,7 @@ function AdminCaseWorkspaceContent() {
       setMeetUrl("");
       setMeetNotes("");
       setFeedback("Sesión Google Meet programada y notificada.");
+      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo programar la sesión.");
     } finally {
@@ -794,16 +771,13 @@ function AdminCaseWorkspaceContent() {
       meetings: updatedMeetings,
     });
 
-    const updatedApp = {
-      ...appData,
+    await updateDoc(doc(db, "applications", appData.id), {
       meetings: updatedMeetings,
       progressPercentage: nextMetrics.progressPercentage,
       currentStep: nextMetrics.currentStep,
       updatedAt: new Date().toISOString(),
-    };
-
-    await updateDoc(doc(db, "applications", appData.id), updatedApp);
-    setAppData(updatedApp);
+    });
+    await fetchCaseDetails();
   };
 
   const handleDeleteMeeting = async (meetingId: string) => {
@@ -813,15 +787,12 @@ function AdminCaseWorkspaceContent() {
       : [];
     const updatedMeetings = currentMeetings.filter((m) => m.id !== meetingId);
 
-    const updatedApp = {
-      ...appData,
+    await updateDoc(doc(db, "applications", appData.id), {
       meetings: updatedMeetings,
       updatedAt: new Date().toISOString(),
-    };
-
-    await updateDoc(doc(db, "applications", appData.id), updatedApp);
-    setAppData(updatedApp);
+    });
     setFeedback("Sesión eliminada del calendario del expediente.");
+    await fetchCaseDetails();
   };
 
   const handleZeroTrustPurgeVault = async () => {
@@ -863,15 +834,11 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      const updatedApp = {
-        ...appData,
+      await updateDoc(doc(db, "applications", appData.id), {
         documents: purgedDocs,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      };
-
-      await updateDoc(doc(db, "applications", appData.id), updatedApp);
-      setAppData(updatedApp);
+      });
 
       await recordSystemLog({
         category: "PII_VAULT",
@@ -887,6 +854,7 @@ function AdminCaseWorkspaceContent() {
       setFeedback(
         "Purga Criptográfica Zero-Trust completada y registrada en el SIEM."
       );
+      await fetchCaseDetails();
     } catch {
       setErrorMsg("Error al ejecutar la purga documental.");
     } finally {
@@ -1190,7 +1158,7 @@ function AdminCaseWorkspaceContent() {
         </div>
       </section>
 
-      {/* BÓVEDA DOCUMENTAL DEL EXPEDIENTE (CON REGLAS DE BLOQUEO, FEEDBACK Y DOBLE CONFIRMACIÓN EN ELIMINAR) */}
+      {/* BÓVEDA DOCUMENTAL DEL EXPEDIENTE (CON REGLAS DE BLOQUEO, FEEDBACK Y DOBLE CONFIRMACIÓN) */}
       <section className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-brand-platinum pb-4">
           <div className="flex items-center gap-3">
@@ -1296,7 +1264,6 @@ function AdminCaseWorkspaceContent() {
                         <span>Descargar Archivo</span>
                       </a>
 
-                      {/* Botón de eliminar con doble confirmación si NO está verificado */}
                       {!isVerified && (
                         <button
                           type="button"
@@ -1331,7 +1298,6 @@ function AdminCaseWorkspaceContent() {
 
                 {hasUploadedFile ? (
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
-                    {/* Si está verificado, se ocultan los botones de dictamen y se pone SOLO la basurita a la derecha */}
                     {isVerified ? (
                       <button
                         type="button"
