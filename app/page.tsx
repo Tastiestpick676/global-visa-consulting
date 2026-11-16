@@ -725,7 +725,7 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* SECCIÓN 4: PLANES Y TARIFAS CON SELECTOR DESLIZANTE ANIMADO */}
+        {/* SECCIÓN 4: PLANES Y TARIFAS */}
         <section
           id="planes"
           className="scroll-mt-20 max-w-7xl mx-auto px-4 sm:px-8 py-20 border-t border-brand-charcoal/10 space-y-10"
@@ -951,7 +951,6 @@ export default function LandingPage() {
             })}
           </div>
 
-          {/* Nota / Botón Secundario para Tarifas Grupales y Adelanto de Cita */}
           <div className="rounded-3xl bg-brand-platinum/60 border border-brand-charcoal/12 p-6 sm:px-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-3.5">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-red/10 text-brand-red">
@@ -1055,9 +1054,9 @@ export default function LandingPage() {
         </section>
       </main>
 
-      {/* FOOTER SÓLIDO CON EL MISMO LOGO DEL INICIO */}
+      {/* FOOTER SÓLIDO CON EL HIPERVÍNCULO CENTRADO A TÉRMINOS Y PRIVACIDAD */}
       <footer className="relative z-20 bg-brand-charcoal text-brand-white border-t border-white/10 px-4 sm:px-8 py-12">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+        <div className="max-w-7xl mx-auto flex flex-col items-center justify-center space-y-4 text-center">
           <a
             href="#top"
             onClick={handleScrollToTop}
@@ -1067,9 +1066,22 @@ export default function LandingPage() {
             <BrandLogo theme="dark" />
           </a>
 
-          <p className="text-xs text-white/70">
-            © 2026 Global Visa Consulting. Todos los derechos reservados. Firma
-            privada independiente de las embajadas.
+          <p className="text-xs text-white/70 max-w-md">
+            Global Visa Consulting • Consultoría Consular y LegalTech Migratoria de Alta Precisión.
+          </p>
+
+          {/* HIPERVÍNCULO CENTRADO A TÉRMINOS Y CONDICIONES */}
+          <div className="pt-3 border-t border-white/10 w-full flex justify-center">
+            <Link
+              href="/terminos"
+              className="text-xs font-semibold text-white/80 hover:text-brand-red transition-colors underline underline-offset-4 cursor-pointer"
+            >
+              Términos, Condiciones y Política de Privacidad
+            </Link>
+          </div>
+
+          <p className="text-[10px] text-white/40 pt-1">
+            © 2026 Global Visa Consulting. Todos los derechos reservados. Firma privada independiente de las embajadas.
           </p>
         </div>
       </footer>
