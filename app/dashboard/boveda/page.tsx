@@ -30,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB máximo según storage.rules
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB máximo
 
 export default function BovedaPage() {
   const { user, profile, application } = useAuth();
@@ -38,8 +38,6 @@ export default function BovedaPage() {
   const [feedback, setFeedback] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Normalizar lista de documentos (soporta Array o Mapa de Firestore)
-  // Si el expediente tiene un arreglo/objeto vacío, carga automáticamente la plantilla por destino
   const defaultDocs = getDefaultDocumentsByDestination(
     application?.destination || "USA"
   );
@@ -252,7 +250,7 @@ export default function BovedaPage() {
             <button
               type="button"
               onClick={() => setFeedback("")}
-              className="p-1 text-emerald-800/70 hover:text-emerald-950"
+              className="p-1 text-emerald-800/70 hover:text-emerald-950 cursor-pointer"
               aria-label="Cerrar alerta"
             >
               <X className="h-4 w-4" />
@@ -269,7 +267,7 @@ export default function BovedaPage() {
             <button
               type="button"
               onClick={() => setErrorMsg("")}
-              className="p-1 text-brand-red/70 hover:text-brand-red"
+              className="p-1 text-brand-red/70 hover:text-brand-red cursor-pointer"
               aria-label="Cerrar error"
             >
               <X className="h-4 w-4" />
@@ -367,7 +365,7 @@ export default function BovedaPage() {
                       className={`cursor-pointer inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold text-white transition-all ${
                         isUploading
                           ? "bg-brand-charcoal/50 pointer-events-none"
-                          : "bg-brand-red hover:bg-brand-charcoal shadow-xs"
+                          : "bg-brand-red hover:bg-brand-charcoal shadow-xs cursor-pointer"
                       }`}
                     >
                       <UploadCloud className="h-4 w-4" />

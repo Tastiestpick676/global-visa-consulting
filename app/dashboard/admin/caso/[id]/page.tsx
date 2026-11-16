@@ -33,7 +33,6 @@ import {
 import {
   buildAuditLogEntry,
   calculateApplicationMetrics,
-  downloadMeetingIcs,
   formatDisplayName,
   getDefaultDocumentsByDestination,
   getGoogleCalendarUrl,
@@ -63,6 +62,9 @@ import {
   Clock,
   History,
   X,
+  Download,
+  FileCheck2,
+  PlusCircle,
 } from "lucide-react";
 
 const inputClass =
@@ -85,7 +87,7 @@ function AdminCaseWorkspaceContent() {
   const [staffList, setStaffList] = useState<UserProfile[]>([]);
   const [loadingCase, setLoadingCase] = useState(true);
 
-  // Estado de enmascaramiento y datos descargados bajo demanda desde la subcolección private_pii/vault
+  // Estado de enmascaramiento y datos descargados bajo demanda
   const [piiRevealed, setPiiRevealed] = useState(false);
   const [unmaskedVaultPii, setUnmaskedVaultPii] = useState<{
     nationalId?: string;
@@ -96,10 +98,18 @@ function AdminCaseWorkspaceContent() {
 
   const [previewVaultDoc, setPreviewVaultDoc] =
     useState<VaultDocumentItem | null>(null);
+  const [previewDeliverable, setPreviewDeliverable] =
+    useState<OfficialDeliverableItem | null>(null);
 
   const [docFeedbackMap, setDocFeedbackMap] = useState<Record<string, string>>(
     {}
   );
+  const [reviewingDocId, setReviewingDocId] = useState<string | null>(null);
+  const [reviewActionType, setReviewActionType] = useState<"verified" | "rejected" | null>(null);
+
+  // Estados de doble confirmación y feedback para eliminación de archivos
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [confirmingDeleteDocId, setConfirmingDeleteDocId] = useState<string | null>(null);
 
   const [delivLabel, setDelivLabel] = useState("");
   const [delivFile, setDelivFile] = useState<File | null>(null);
@@ -149,15 +159,15 @@ function AdminCaseWorkspaceContent() {
   }, [isStaff, caseId]);
 
   useEffect(() => {
-    if (!previewVaultDoc) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setPreviewVaultDoc(null);
+        setPreviewDeliverable(null);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [previewVaultDoc]);
+  }, []);
 
   const handleToggleRevealPii = async () => {
     if (!appData || !profile) return;
@@ -211,7 +221,8 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      await updateDoc(doc(db, "applications", appData.id), {
+      const updatedApp = {
+        ...appData,
         assignedAdvisorId: selectedAdvisor.uid,
         assignedAdvisorName: cleanAdvName,
         assignedAdvisorEmail: selectedAdvisor.email,
@@ -219,7 +230,10 @@ function AdminCaseWorkspaceContent() {
         assignedAdvisorBookingUrl: selectedAdvisor.bookingUrl || "",
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await updateDoc(doc(db, "applications", appData.id), updatedApp);
+      setAppData(updatedApp);
 
       await recordSystemLog({
         category: "CASE_TRACEABILITY",
@@ -235,7 +249,6 @@ function AdminCaseWorkspaceContent() {
       });
 
       setFeedback(`Especialista ${cleanAdvName} asignado correctamente.`);
-      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo asignar el especialista.");
     }
@@ -258,7 +271,8 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      await updateDoc(doc(db, "applications", appData.id), {
+      const updatedApp = {
+        ...appData,
         status: nextStatus,
         progressPercentage:
           nextStatus === "approved" || nextStatus === "rejected"
@@ -266,7 +280,10 @@ function AdminCaseWorkspaceContent() {
             : appData.progressPercentage,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await updateDoc(doc(db, "applications", appData.id), updatedApp);
+      setAppData(updatedApp);
 
       await recordSystemLog({
         category: "CASE_TRACEABILITY",
@@ -295,7 +312,6 @@ function AdminCaseWorkspaceContent() {
       setFeedback(
         `Estatus actualizado a ${nextStatus.toUpperCase()} y notificado.`
       );
-      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo cambiar el estatus del expediente.");
     }
@@ -320,6 +336,10 @@ function AdminCaseWorkspaceContent() {
       );
       return;
     }
+
+    setReviewingDocId(docItem.id);
+    setReviewActionType(verdict);
+    setErrorMsg("");
 
     try {
       const cleanActor = formatDisplayName(profile.fullName);
@@ -357,14 +377,18 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      await updateDoc(doc(db, "applications", appData.id), {
+      const updatedApp = {
+        ...appData,
         documents: updatedDocs,
         progressPercentage: nextMetrics.progressPercentage,
         currentStep: nextMetrics.currentStep,
         status: nextMetrics.autoStatus,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await updateDoc(doc(db, "applications", appData.id), updatedApp);
+      setAppData(updatedApp);
 
       await recordSystemLog({
         category: "PII_VAULT",
@@ -375,7 +399,7 @@ function AdminCaseWorkspaceContent() {
         actorEmail: profile.email,
         actorName: cleanActor,
         actorRole: profile.role,
-        targetResource: `${clientName} • ${docItem.title}`,
+        targetResource: `${clientName} - ${docItem.title}`,
         details:
           verdict === "verified"
             ? `Soporte "${docItem.title}" aprobado.`
@@ -418,15 +442,18 @@ function AdminCaseWorkspaceContent() {
       }
 
       setFeedback(`Dictamen guardado y notificado al cliente.`);
-      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo guardar el dictamen del documento.");
+    } finally {
+      setReviewingDocId(null);
+      setReviewActionType(null);
     }
   };
 
   const handleDeleteSingleDocument = async (docItem: VaultDocumentItem) => {
     if (!appData || !profile) return;
 
+    setDeletingDocId(docItem.id);
     try {
       if (docItem.storagePath) {
         try {
@@ -469,14 +496,18 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      await updateDoc(doc(db, "applications", appData.id), {
+      const updatedApp = {
+        ...appData,
         documents: updatedDocs,
         progressPercentage: nextMetrics.progressPercentage,
         currentStep: nextMetrics.currentStep,
         status: nextMetrics.autoStatus,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await updateDoc(doc(db, "applications", appData.id), updatedApp);
+      setAppData(updatedApp);
 
       await recordSystemLog({
         category: "PII_VAULT",
@@ -485,16 +516,57 @@ function AdminCaseWorkspaceContent() {
         actorEmail: profile.email,
         actorName: cleanActor,
         actorRole: profile.role,
-        targetResource: `${clientName} • ${docItem.title}`,
+        targetResource: `${clientName} - ${docItem.title}`,
         details: `El asesor eliminó el archivo "${
           docItem.fileName || docItem.title
         }" y restableció el requisito a pendiente.`,
       });
 
       setFeedback(`Archivo de "${docItem.title}" eliminado correctamente.`);
-      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo eliminar el archivo seleccionado.");
+    } finally {
+      setDeletingDocId(null);
+      setConfirmingDeleteDocId(null);
+    }
+  };
+
+  const handleDeleteDeliverable = async (delivItem: OfficialDeliverableItem) => {
+    if (!appData || !profile) return;
+
+    try {
+      if (delivItem.storagePath) {
+        try {
+          await deleteObject(ref(storage, delivItem.storagePath));
+        } catch {}
+      }
+
+      const currentDelivs = Array.isArray(appData.officialDeliverables)
+        ? appData.officialDeliverables
+        : [];
+      const updatedDelivs = currentDelivs.filter((d) => d.id !== delivItem.id);
+
+      const cleanActor = formatDisplayName(profile.fullName);
+      const audit = buildAuditLogEntry(
+        `Eliminación de Entregable Oficial: ${delivItem.label}`,
+        `Entregable eliminado por ${cleanActor}.`,
+        cleanActor,
+        profile.role
+      );
+
+      const updatedApp = {
+        ...appData,
+        officialDeliverables: updatedDelivs,
+        auditLogs: [audit, ...(appData.auditLogs || [])],
+        updatedAt: new Date().toISOString(),
+      };
+
+      await updateDoc(doc(db, "applications", appData.id), updatedApp);
+      setAppData(updatedApp);
+
+      setFeedback(`Entregable "${delivItem.label}" eliminado correctamente.`);
+    } catch {
+      setErrorMsg("No se pudo eliminar el entregable.");
     }
   };
 
@@ -548,14 +620,18 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      await updateDoc(doc(db, "applications", appData.id), {
+      const updatedApp = {
+        ...appData,
         officialDeliverables: updatedDeliverables,
         progressPercentage: nextMetrics.progressPercentage,
         currentStep: nextMetrics.currentStep,
         status: nextMetrics.autoStatus,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await updateDoc(doc(db, "applications", appData.id), updatedApp);
+      setAppData(updatedApp);
 
       await recordSystemLog({
         category: "PII_VAULT",
@@ -593,7 +669,6 @@ function AdminCaseWorkspaceContent() {
       setDelivLabel("");
       setDelivFile(null);
       setFeedback(`¡Entregable "${newDeliv.label}" emitido y notificado!`);
-      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo subir el entregable oficial.");
     } finally {
@@ -638,11 +713,15 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      await updateDoc(doc(db, "applications", appData.id), {
+      const updatedApp = {
+        ...appData,
         meetings: updatedMeetings,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await updateDoc(doc(db, "applications", appData.id), updatedApp);
+      setAppData(updatedApp);
 
       await recordSystemLog({
         category: "CASE_TRACEABILITY",
@@ -694,7 +773,6 @@ function AdminCaseWorkspaceContent() {
       setMeetUrl("");
       setMeetNotes("");
       setFeedback("Sesión Google Meet programada y notificada.");
-      await fetchCaseDetails();
     } catch {
       setErrorMsg("No se pudo programar la sesión.");
     } finally {
@@ -715,13 +793,16 @@ function AdminCaseWorkspaceContent() {
       meetings: updatedMeetings,
     });
 
-    await updateDoc(doc(db, "applications", appData.id), {
+    const updatedApp = {
+      ...appData,
       meetings: updatedMeetings,
       progressPercentage: nextMetrics.progressPercentage,
       currentStep: nextMetrics.currentStep,
       updatedAt: new Date().toISOString(),
-    });
-    await fetchCaseDetails();
+    };
+
+    await updateDoc(doc(db, "applications", appData.id), updatedApp);
+    setAppData(updatedApp);
   };
 
   const handleDeleteMeeting = async (meetingId: string) => {
@@ -731,12 +812,15 @@ function AdminCaseWorkspaceContent() {
       : [];
     const updatedMeetings = currentMeetings.filter((m) => m.id !== meetingId);
 
-    await updateDoc(doc(db, "applications", appData.id), {
+    const updatedApp = {
+      ...appData,
       meetings: updatedMeetings,
       updatedAt: new Date().toISOString(),
-    });
+    };
+
+    await updateDoc(doc(db, "applications", appData.id), updatedApp);
+    setAppData(updatedApp);
     setFeedback("Sesión eliminada del calendario del expediente.");
-    await fetchCaseDetails();
   };
 
   const handleZeroTrustPurgeVault = async () => {
@@ -778,11 +862,15 @@ function AdminCaseWorkspaceContent() {
         profile.role
       );
 
-      await updateDoc(doc(db, "applications", appData.id), {
+      const updatedApp = {
+        ...appData,
         documents: purgedDocs,
         auditLogs: [audit, ...(appData.auditLogs || [])],
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await updateDoc(doc(db, "applications", appData.id), updatedApp);
+      setAppData(updatedApp);
 
       await recordSystemLog({
         category: "PII_VAULT",
@@ -798,7 +886,6 @@ function AdminCaseWorkspaceContent() {
       setFeedback(
         "Purga Criptográfica Zero-Trust completada y registrada en el SIEM."
       );
-      await fetchCaseDetails();
     } catch {
       setErrorMsg("Error al ejecutar la purga documental.");
     } finally {
@@ -830,12 +917,20 @@ function AdminCaseWorkspaceContent() {
       ? appData.documents
       : getDefaultDocumentsByDestination(appData.destination);
 
+  const officialDeliverablesList: OfficialDeliverableItem[] = Array.isArray(
+    appData.officialDeliverables
+  )
+    ? appData.officialDeliverables
+    : [];
+
   const caseAuditLogs = Array.isArray(appData.auditLogs)
     ? appData.auditLogs
     : [];
 
   const isCaseConcluded =
     appData.status === "approved" || appData.status === "rejected";
+
+  const scheduledMeetings = Array.isArray(appData.meetings) ? appData.meetings : [];
 
   return (
     <div className="space-y-8 font-sans">
@@ -846,7 +941,7 @@ function AdminCaseWorkspaceContent() {
             <button
               type="button"
               onClick={() => router.push("/dashboard/admin?tab=gobernanza")}
-              className="inline-flex items-center gap-1.5 text-xs font-bold text-white/70 hover:text-brand-red transition-colors mb-1"
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-white/70 hover:text-brand-red transition-colors mb-1 cursor-pointer"
             >
               <ArrowLeft className="h-4 w-4" />
               <span>Volver al Monitor de Operaciones</span>
@@ -877,7 +972,7 @@ function AdminCaseWorkspaceContent() {
                 aria-label="Asignar especialista legal"
                 value={appData.assignedAdvisorId || ""}
                 onChange={(e) => handleAssignAdvisor(e.target.value)}
-                className="h-10 rounded-full bg-white/10 border border-white/15 px-4 text-xs font-bold text-white focus:outline-none focus:border-brand-red"
+                className="h-10 rounded-full bg-white/10 border border-white/15 px-4 text-xs font-bold text-white focus:outline-none focus:border-brand-red cursor-pointer"
               >
                 <option value="" className="text-brand-charcoal">
                   ⚠️ Sin Asesor (En Bolsa)
@@ -897,7 +992,7 @@ function AdminCaseWorkspaceContent() {
             <button
               type="button"
               onClick={() => handleUpdateFinalConsularStatus("approved")}
-              className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-bold text-white transition-all"
+              className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-bold text-white transition-all cursor-pointer"
             >
               <CheckCircle2 className="h-3.5 w-3.5" />
               <span>Visa Aprobada</span>
@@ -906,7 +1001,7 @@ function AdminCaseWorkspaceContent() {
             <button
               type="button"
               onClick={() => handleUpdateFinalConsularStatus("rejected")}
-              className="inline-flex items-center gap-1.5 rounded-full bg-brand-red hover:bg-brand-red/90 px-4 py-2 text-xs font-bold text-white transition-all"
+              className="inline-flex items-center gap-1.5 rounded-full bg-brand-red hover:bg-brand-red/90 px-4 py-2 text-xs font-bold text-white transition-all cursor-pointer"
             >
               <XCircle className="h-3.5 w-3.5" />
               <span>Rechazada</span>
@@ -914,7 +1009,7 @@ function AdminCaseWorkspaceContent() {
           </div>
         </div>
 
-        {/* CONTROL DE ENMASCARAMIENTO PII CON BÓVEDA SUBCOLECCIÓN */}
+        {/* CONTROL DE ENMASCARAMIENTO PII */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl bg-white/5 border border-white/10 p-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red/20 text-brand-red">
@@ -922,11 +1017,10 @@ function AdminCaseWorkspaceContent() {
             </div>
             <div>
               <p className="text-xs font-bold text-white">
-                Aislamiento Criptográfico de Subcolección PII (`private_pii/vault`)
+                Aislamiento Criptográfico y Bóveda Segura de Datos PII
               </p>
               <p className="text-[11px] text-white/65">
-                Cédula, Pasaporte e Ingresos no viajan en la carga inicial; se
-                descargan bajo demanda y quedan auditados en el SIEM.
+                Cédula, Pasaporte e Ingresos están protegidos bajo estricto control de acceso y bitácora en el SIEM.
               </p>
             </div>
           </div>
@@ -934,7 +1028,7 @@ function AdminCaseWorkspaceContent() {
           <button
             type="button"
             onClick={handleToggleRevealPii}
-            className={`inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold transition-all shrink-0 ${
+            className={`inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold transition-all shrink-0 cursor-pointer ${
               piiRevealed
                 ? "bg-amber-500 text-brand-charcoal"
                 : "bg-white/10 hover:bg-brand-red text-white border border-white/15"
@@ -964,7 +1058,7 @@ function AdminCaseWorkspaceContent() {
           <button
             type="button"
             onClick={() => setFeedback("")}
-            className="p-1"
+            className="p-1 cursor-pointer"
             aria-label="Cerrar mensaje"
           >
             <X className="h-4 w-4" />
@@ -981,7 +1075,7 @@ function AdminCaseWorkspaceContent() {
           <button
             type="button"
             onClick={() => setErrorMsg("")}
-            className="p-1"
+            className="p-1 cursor-pointer"
             aria-label="Cerrar error"
           >
             <X className="h-4 w-4" />
@@ -1095,7 +1189,7 @@ function AdminCaseWorkspaceContent() {
         </div>
       </section>
 
-      {/* AUDITORÍA DE BÓVEDA DOCUMENTAL ESTILO FINTECH EJECUTIVO */}
+      {/* BÓVEDA DOCUMENTAL DEL EXPEDIENTE (CON REGLAS DE BLOQUEO, FEEDBACK Y DOBLE CONFIRMACIÓN EN ELIMINAR) */}
       <section className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-brand-platinum pb-4">
           <div className="flex items-center gap-3">
@@ -1107,8 +1201,7 @@ function AdminCaseWorkspaceContent() {
                 Bóveda Documental del Expediente ({docsList.length} requisitos)
               </h3>
               <p className="text-xs text-brand-charcoal/70">
-                Los controles de dictamen, previsualización y eliminación
-                individual se activan cuando el cliente sube cada soporte.
+                Revisa, previsualiza, descarga o emite dictamen sobre los soportes subidos por el cliente.
               </p>
             </div>
           </div>
@@ -1118,7 +1211,7 @@ function AdminCaseWorkspaceContent() {
               type="button"
               onClick={handleZeroTrustPurgeVault}
               disabled={purgingVault}
-              className="inline-flex items-center gap-2 rounded-full border border-brand-red/40 bg-brand-red/10 hover:bg-brand-red hover:text-white px-4 py-2 text-xs font-bold text-brand-red transition-all"
+              className="inline-flex items-center gap-2 rounded-full border border-brand-red/40 bg-brand-red/10 hover:bg-brand-red hover:text-white px-4 py-2 text-xs font-bold text-brand-red transition-all cursor-pointer"
             >
               <Trash2 className="h-3.5 w-3.5" />
               <span>
@@ -1133,6 +1226,11 @@ function AdminCaseWorkspaceContent() {
         <div className="divide-y divide-brand-platinum border border-brand-charcoal/10 rounded-2xl overflow-hidden">
           {docsList.map((docItem) => {
             const hasUploadedFile = Boolean(docItem.fileUrl);
+            const isVerified = docItem.status === "verified";
+            const isRejected = docItem.status === "rejected";
+            const isThisDocReviewing = reviewingDocId === docItem.id;
+            const isThisDocDeleting = deletingDocId === docItem.id;
+            const isConfirmingDelete = confirmingDeleteDocId === docItem.id;
 
             const statusBadge =
               docItem.status === "verified"
@@ -1176,63 +1274,156 @@ function AdminCaseWorkspaceContent() {
                   </p>
 
                   {hasUploadedFile && (
-                    <div className="pt-1.5 flex flex-wrap items-center gap-3">
+                    <div className="pt-2 flex flex-wrap items-center gap-3">
                       <button
                         type="button"
                         onClick={() => setPreviewVaultDoc(docItem)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-brand-platinum/70 hover:bg-brand-charcoal hover:text-white px-3 py-1.5 text-xs font-bold text-brand-charcoal transition-colors"
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-brand-platinum/70 hover:bg-brand-charcoal hover:text-white px-3.5 py-2 text-xs font-bold text-brand-charcoal transition-colors cursor-pointer"
                       >
                         <Eye className="h-3.5 w-3.5 text-brand-red" />
-                        <span>
-                          Previsualizar ({docItem.fileName || "Documento"})
-                        </span>
+                        <span>Previsualizar</span>
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSingleDocument(docItem)}
-                        title="Eliminar este archivo individualmente"
-                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-charcoal/55 hover:text-brand-red transition-colors"
+                      <a
+                        href={docItem.fileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-brand-charcoal text-white hover:bg-brand-red px-3.5 py-2 text-xs font-bold transition-colors cursor-pointer"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        <span>Eliminar archivo</span>
-                      </button>
+                        <Download className="h-3.5 w-3.5" />
+                        <span>Descargar Archivo</span>
+                      </a>
+
+                      {/* Botón de eliminar con doble confirmación si NO está verificado */}
+                      {!isVerified && (
+                        <button
+                          type="button"
+                          disabled={isThisDocDeleting}
+                          onClick={() => {
+                            if (!isConfirmingDelete) {
+                              setConfirmingDeleteDocId(docItem.id);
+                              setTimeout(() => setConfirmingDeleteDocId(null), 4000);
+                            } else {
+                              handleDeleteSingleDocument(docItem);
+                            }
+                          }}
+                          className={`inline-flex items-center gap-1 text-[11px] font-semibold transition-all cursor-pointer ml-auto ${
+                            isConfirmingDelete
+                              ? "bg-brand-red text-white px-2.5 py-1 rounded-lg animate-pulse"
+                              : "text-brand-charcoal/55 hover:text-brand-red"
+                          }`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>
+                            {isThisDocDeleting
+                              ? "Eliminando..."
+                              : isConfirmingDelete
+                              ? "¿Confirmar?"
+                              : "Eliminar archivo"}
+                          </span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
 
                 {hasUploadedFile ? (
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
-                    <input
-                      type="text"
-                      value={docFeedbackMap[docItem.id] || ""}
-                      onChange={(e) =>
-                        setDocFeedbackMap((prev) => ({
-                          ...prev,
-                          [docItem.id]: e.target.value,
-                        }))
-                      }
-                      placeholder="Observación (si pides ajuste)..."
-                      className="h-9 sm:w-56 rounded-xl bg-brand-platinum/50 border border-brand-charcoal/15 px-3 text-xs text-brand-charcoal focus:bg-white focus:border-brand-red focus:outline-none"
-                    />
-                    <div className="flex items-center gap-2">
+                    {/* Si está verificado, se ocultan los botones de dictamen y se pone SOLO la basurita a la derecha */}
+                    {isVerified ? (
                       <button
                         type="button"
-                        onClick={() => handleReviewDocument(docItem, "verified")}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-brand-charcoal hover:bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white transition-all"
+                        disabled={isThisDocDeleting}
+                        onClick={() => {
+                          if (!isConfirmingDelete) {
+                            setConfirmingDeleteDocId(docItem.id);
+                            setTimeout(() => setConfirmingDeleteDocId(null), 4000);
+                          } else {
+                            handleDeleteSingleDocument(docItem);
+                          }
+                        }}
+                        title={isConfirmingDelete ? "Haz clic de nuevo para confirmar" : "Eliminar archivo aprobado"}
+                        className={`flex h-10 items-center justify-center rounded-xl border transition-all cursor-pointer px-3.5 ${
+                          isConfirmingDelete
+                            ? "bg-brand-red text-white border-brand-red animate-pulse text-xs font-bold gap-1.5"
+                            : "border-brand-charcoal/15 bg-brand-platinum/50 hover:bg-brand-red hover:text-white hover:border-brand-red text-brand-charcoal/70"
+                        }`}
                       >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        <span>Aprobar</span>
+                        <Trash2 className="h-4 w-4 shrink-0" />
+                        {isConfirmingDelete && <span>¿Eliminar?</span>}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleReviewDocument(docItem, "rejected")}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-brand-red/30 bg-brand-red/10 hover:bg-brand-red hover:text-white px-3.5 py-2 text-xs font-bold text-brand-red transition-all"
-                      >
-                        <XCircle className="h-3.5 w-3.5" />
-                        <span>Ajuste</span>
-                      </button>
-                    </div>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          disabled={isRejected || isThisDocReviewing}
+                          value={docFeedbackMap[docItem.id] || ""}
+                          onChange={(e) =>
+                            setDocFeedbackMap((prev) => ({
+                              ...prev,
+                              [docItem.id]: e.target.value,
+                            }))
+                          }
+                          placeholder={
+                            isRejected
+                              ? "Ajuste ya solicitado (esperando al cliente)"
+                              : "Observación (si pides ajuste)..."
+                          }
+                          className={`h-10 sm:w-56 rounded-xl border px-3 text-xs focus:outline-none ${
+                            isRejected
+                              ? "bg-brand-platinum border-brand-charcoal/10 text-brand-charcoal/50 cursor-not-allowed"
+                              : "bg-brand-platinum/50 border-brand-charcoal/15 text-brand-charcoal focus:bg-white focus:border-brand-red"
+                          }`}
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isRejected || isThisDocReviewing}
+                            onClick={() => handleReviewDocument(docItem, "verified")}
+                            className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-xs font-bold text-white transition-all ${
+                              isRejected
+                                ? "bg-brand-charcoal/30 cursor-not-allowed"
+                                : "bg-brand-charcoal hover:bg-emerald-600 cursor-pointer"
+                            }`}
+                          >
+                            {isThisDocReviewing && reviewActionType === "verified" ? (
+                              <>
+                                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                                <span>Aprobando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                <span>Aprobar</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isRejected || isThisDocReviewing}
+                            onClick={() => handleReviewDocument(docItem, "rejected")}
+                            className={`inline-flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-xs font-bold transition-all ${
+                              isRejected
+                                ? "border-brand-red/20 bg-brand-red/5 text-brand-red/40 cursor-not-allowed"
+                                : "border-brand-red/30 bg-brand-red/10 hover:bg-brand-red hover:text-white text-brand-red cursor-pointer"
+                            }`}
+                          >
+                            {isThisDocReviewing && reviewActionType === "rejected" ? (
+                              <>
+                                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand-red border-t-transparent" />
+                                <span>Enviando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="h-3.5 w-3.5" />
+                                <span>Ajuste</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-xs text-brand-charcoal/50 font-medium shrink-0">
@@ -1246,56 +1437,133 @@ function AdminCaseWorkspaceContent() {
         </div>
       </section>
 
-      {/* EMISIÓN DE ENTREGABLES OFICIALES Y AGENDAMIENTO GOOGLE MEET */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-        <form
-          onSubmit={handleUploadDeliverable}
-          className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-4"
-        >
-          <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
-            <UploadCloud className="h-5 w-5 text-brand-red" />
+      {/* SECCIÓN UNIFICADA DE ENTREGABLES OFICIALES */}
+      <section className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-6">
+        <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-red/10 text-brand-red">
+              <FileCheck2 className="h-5 w-5" />
+            </div>
             <div>
-              <h3 className="font-display text-base font-bold text-brand-charcoal">
-                Emitir Entregable Oficial al Cliente
+              <h3 className="font-display text-lg font-bold text-brand-charcoal">
+                Entregables Oficiales del Expediente ({officialDeliverablesList.length})
               </h3>
               <p className="text-xs text-brand-charcoal/70">
-                Hoja de Confirmación DS-160, Citas CAS o Schedule of Stay.
+                Gestiona, previsualiza, descarga o emite nuevos documentos oficiales para el cliente.
               </p>
             </div>
           </div>
+        </div>
 
-          <div className="space-y-3">
-            <input
-              type="text"
-              required
-              value={delivLabel}
-              onChange={(e) => setDelivLabel(e.target.value)}
-              placeholder="Ej. Confirmación Oficial CEAC DS-160 / Schedule of Stay"
-              className={inputClass}
-            />
+        {officialDeliverablesList.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {officialDeliverablesList.map((deliv) => (
+              <div
+                key={deliv.id}
+                className="rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10 flex flex-col justify-between gap-3"
+              >
+                <div className="space-y-1 min-w-0">
+                  <span className="font-mono text-[10px] font-bold uppercase text-brand-red block">
+                    DOCUMENTO OFICIAL • GVC
+                  </span>
+                  <h4 className="font-display text-base font-bold text-brand-charcoal truncate">
+                    {deliv.label}
+                  </h4>
+                  <p className="text-xs text-brand-charcoal/70 truncate">
+                    📄 {deliv.fileName} • Emitido por {formatDisplayName(deliv.uploadedBy || "Especialista")}
+                  </p>
+                </div>
 
-            <label className="cursor-pointer flex items-center justify-between h-11 rounded-xl border border-dashed border-brand-red/40 bg-brand-red/[0.03] px-4 text-xs font-semibold text-brand-charcoal">
-              <span className="truncate">
-                {delivFile
-                  ? `📄 ${delivFile.name}`
-                  : "Seleccionar PDF oficial..."}
-              </span>
-              <span className="rounded bg-brand-red px-2.5 py-1 text-[10px] font-bold text-white uppercase">
-                Explorar
-              </span>
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-brand-charcoal/10">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewDeliverable(deliv)}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-brand-white border border-brand-charcoal/15 hover:border-brand-charcoal px-3 py-1.5 text-xs font-bold text-brand-charcoal transition-all cursor-pointer"
+                  >
+                    <Eye className="h-3.5 w-3.5 text-brand-red" />
+                    <span>Previsualizar</span>
+                  </button>
+
+                  <a
+                    href={deliv.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download
+                    className="inline-flex items-center gap-1.5 rounded-full bg-brand-red hover:bg-brand-red/90 px-3.5 py-1.5 text-xs font-bold text-white transition-all cursor-pointer shadow-sm"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>Descargar</span>
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteDeliverable(deliv)}
+                    title="Eliminar entregable"
+                    className="rounded-full p-2 text-brand-charcoal/50 hover:text-brand-red transition-colors cursor-pointer ml-auto"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-brand-platinum/30 p-5 text-center text-xs text-brand-charcoal/65">
+            Aún no se ha emitido ningún entregable oficial para este expediente. Utiliza el formulario inferior para adjuntar el primero.
+          </div>
+        )}
+
+        <form
+          onSubmit={handleUploadDeliverable}
+          className="rounded-2xl bg-brand-platinum/50 border border-brand-charcoal/10 p-5 sm:p-6 space-y-4 pt-5 border-t border-brand-platinum"
+        >
+          <div className="flex items-center gap-2">
+            <PlusCircle className="h-4 w-4 text-brand-red" />
+            <h4 className="font-display text-sm font-bold text-brand-charcoal">
+              Emitir Nuevo Entregable al Cliente
+            </h4>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-brand-charcoal">
+                Título o Nombre del Entregable
+              </label>
               <input
-                type="file"
-                accept=".pdf,image/*"
-                className="hidden"
-                onChange={(e) => setDelivFile(e.target.files?.[0] || null)}
+                type="text"
+                required
+                value={delivLabel}
+                onChange={(e) => setDelivLabel(e.target.value)}
+                placeholder="Ej. Confirmación Oficial CEAC DS-160 / Schedule of Stay"
+                className={inputClass}
               />
-            </label>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-brand-charcoal">
+                Archivo PDF o Imagen Oficial
+              </label>
+              <label className="cursor-pointer group flex items-center justify-between h-11 rounded-xl border border-dashed border-brand-red/40 bg-brand-white px-3.5 text-xs font-semibold text-brand-charcoal hover:border-brand-red transition-all">
+                <span className="truncate">
+                  {delivFile ? `📄 ${delivFile.name}` : "Seleccionar archivo PDF o imagen..."}
+                </span>
+                <span className="rounded bg-brand-red px-2.5 py-1 text-[10px] font-bold text-white uppercase shrink-0">
+                  Explorar
+                </span>
+                <input
+                  type="file"
+                  accept=".pdf,image/*"
+                  className="hidden"
+                  onChange={(e) => setDelivFile(e.target.files?.[0] || null)}
+                />
+              </label>
+            </div>
           </div>
 
           <button
             type="submit"
-            disabled={uploadingDeliv || !delivFile}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-3 text-xs font-bold text-white hover:bg-brand-charcoal disabled:opacity-50 transition-all"
+            disabled={uploadingDeliv || !delivFile || !delivLabel.trim()}
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-full bg-brand-red px-6 py-3 text-xs font-bold text-white hover:bg-brand-charcoal disabled:opacity-50 transition-all cursor-pointer shadow-md"
           >
             <UploadCloud className="h-4 w-4" />
             <span>
@@ -1305,130 +1573,144 @@ function AdminCaseWorkspaceContent() {
             </span>
           </button>
         </form>
+      </section>
 
-        <form
-          onSubmit={handleScheduleMeeting}
-          className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-4"
-        >
+      {/* AGENDAMIENTO DE REUNIONES */}
+      <section className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-4">
+        <form onSubmit={handleScheduleMeeting} className="space-y-4">
           <div className="flex items-center gap-2.5 border-b border-brand-platinum pb-3.5">
-            <Calendar className="h-5 w-5 text-brand-red" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-charcoal/10 text-brand-charcoal">
+              <Calendar className="h-5 w-5" />
+            </div>
             <div>
               <h3 className="font-display text-base font-bold text-brand-charcoal">
                 Programar Simulacro 1-a-1 (Google Meet)
               </h3>
               <p className="text-xs text-brand-charcoal/70">
-                Envía citación automática con calendario al correo y Sala
-                Consular.
+                Envía citación automática con calendario al correo y Sala Consular.
               </p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <input
-              type="text"
-              required
-              value={meetTitle}
-              onChange={(e) => setMeetTitle(e.target.value)}
-              placeholder="Ej. Simulacro Consular 1-a-1"
-              className={inputClass}
-            />
-            <input
-              type="datetime-local"
-              required
-              value={meetDateTime}
-              onChange={(e) => setMeetDateTime(e.target.value)}
-              className={inputClass}
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-brand-charcoal">Motivo de Sesión</label>
+              <input
+                type="text"
+                required
+                value={meetTitle}
+                onChange={(e) => setMeetTitle(e.target.value)}
+                placeholder="Ej. Simulacro Consular 1-a-1"
+                className={inputClass}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-brand-charcoal">Fecha y Hora</label>
+              <input
+                type="datetime-local"
+                required
+                value={meetDateTime}
+                onChange={(e) => setMeetDateTime(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-brand-charcoal">Enlace Google Meet</label>
+              <input
+                type="url"
+                value={meetUrl}
+                onChange={(e) => setMeetUrl(e.target.value)}
+                placeholder="https://meet.google.com/xxx..."
+                className={inputClass}
+              />
+            </div>
           </div>
-
-          <input
-            type="url"
-            value={meetUrl}
-            onChange={(e) => setMeetUrl(e.target.value)}
-            placeholder="https://meet.google.com/xxx-xxxx-xxx"
-            className={inputClass}
-          />
 
           <button
             type="submit"
-            disabled={savingMeet}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-brand-charcoal px-6 py-3 text-xs font-bold text-white hover:bg-brand-red disabled:opacity-50 transition-all"
+            disabled={savingMeet || !meetTitle.trim() || !meetDateTime}
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-full bg-brand-charcoal px-6 py-3 text-xs font-bold text-white hover:bg-brand-red disabled:opacity-50 transition-all cursor-pointer shadow-md"
           >
-            <Video className="h-4 w-4" />
+            <Video className="h-4 w-4 text-brand-red" />
             <span>
-              {savingMeet
-                ? "Agendando..."
-                : "Agendar Sesión y Enviar Citación"}
+              {savingMeet ? "Agendando..." : "Agendar Sesión y Enviar Citación"}
             </span>
           </button>
+        </form>
 
-          {/* LISTA DE SESIONES YA AGENDADAS EN ESTE EXPEDIENTE CON DESCARGA .ICS */}
-          {Array.isArray(appData.meetings) && appData.meetings.length > 0 && (
-            <div className="pt-4 border-t border-brand-platinum space-y-2.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-brand-charcoal/60 block">
-                Sesiones Agendadas con {clientName} ({appData.meetings.length})
-              </span>
-              {appData.meetings.map((m) => (
+        {/* LISTA DE SESIONES AGENDADAS */}
+        {scheduledMeetings.length > 0 && (
+          <div className="pt-6 border-t border-brand-platinum space-y-3">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-brand-charcoal/60 block">
+              Historial de Sesiones con {clientName} ({scheduledMeetings.length})
+            </span>
+            <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-brand-platinum">
+              {scheduledMeetings.map((m) => (
                 <div
                   key={m.id}
-                  className="rounded-2xl bg-brand-platinum/40 p-3.5 border border-brand-charcoal/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                  className="relative rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10 space-y-2.5 text-xs transition-all hover:border-brand-charcoal/20"
                 >
-                  <div className="space-y-0.5 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-brand-charcoal truncate">
-                        {m.title}
-                      </span>
-                      {m.completed && (
-                        <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                          Completada
+                  <span className="absolute -left-6 top-4 h-3 w-3 rounded-full border-2 border-brand-white bg-brand-red ring-2 ring-brand-platinum" />
+
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-brand-charcoal">
+                          {m.title}
                         </span>
-                      )}
+                        {m.completed && (
+                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                            Completada
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-brand-charcoal/70">
+                        📅{" "}
+                        {new Date(m.dateTime).toLocaleString("es-CO", {
+                          dateStyle: "full",
+                          timeStyle: "short",
+                        })}{" "}
+                        • {formatDisplayName(m.advisorName)}
+                      </p>
                     </div>
-                    <p className="text-[11px] text-brand-charcoal/70">
-                      📅{" "}
-                      {new Date(m.dateTime).toLocaleString("es-CO", {
-                        dateStyle: "short",
-                        timeStyle: "short",
-                      })}{" "}
-                      • {formatDisplayName(m.advisorName)}
-                    </p>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => downloadMeetingIcs(m, clientName)}
-                      title="Descargar evento .ics para Apple Calendar / Outlook"
-                      className="inline-flex items-center gap-1 rounded-lg border border-brand-charcoal/15 bg-white hover:bg-brand-charcoal hover:text-white px-2.5 py-1.5 text-[11px] font-bold text-brand-charcoal transition-colors"
-                    >
-                      <CalendarPlus className="h-3 w-3 text-brand-red" />
-                      <span>.ics</span>
-                    </button>
-
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-brand-charcoal/10">
                     {m.meetUrl && (
                       <a
                         href={m.meetUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded-lg bg-brand-charcoal hover:bg-brand-red px-2.5 py-1.5 text-[11px] font-bold text-white transition-colors"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-brand-charcoal hover:bg-brand-red px-3 py-1.5 text-[11px] font-bold text-white transition-colors"
                       >
-                        <Video className="h-3 w-3" />
-                        <span>Meet</span>
+                        <Video className="h-3 w-3 text-brand-red" />
+                        <span>Google Meet</span>
+                        <ExternalLink className="h-3 w-3" />
                       </a>
                     )}
 
                     <button
                       type="button"
-                      onClick={() => handleToggleMeetingCompleted(m.id)}
-                      className="rounded-lg border border-brand-charcoal/15 bg-white hover:bg-emerald-600 hover:text-white px-2.5 py-1.5 text-[11px] font-bold text-brand-charcoal transition-colors"
+                      onClick={() => downloadMeetingIcs(m, clientName)}
+                      title="Descargar archivo .ics"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-brand-charcoal/15 bg-white hover:bg-brand-charcoal hover:text-white px-3 py-1.5 text-[11px] font-bold text-brand-charcoal transition-colors cursor-pointer"
                     >
-                      {m.completed ? "Reabrir" : "✓ Completar"}
+                      <CalendarPlus className="h-3 w-3 text-brand-red" />
+                      <span>.ics</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleToggleMeetingCompleted(m.id)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-brand-charcoal/15 bg-white hover:bg-emerald-600 hover:text-white px-3 py-1.5 text-[11px] font-bold text-brand-charcoal transition-colors cursor-pointer"
+                    >
+                      <span>{m.completed ? "Reabrir" : "✓ Completar"}</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => handleDeleteMeeting(m.id)}
-                      className="rounded-lg p-1.5 text-brand-charcoal/50 hover:text-brand-red transition-colors"
+                      className="rounded-lg p-1.5 text-brand-charcoal/50 hover:text-brand-red transition-colors cursor-pointer ml-auto"
                       title="Cancelar / Eliminar sesión"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -1437,11 +1719,11 @@ function AdminCaseWorkspaceContent() {
                 </div>
               ))}
             </div>
-          )}
-        </form>
-      </div>
+          </div>
+        )}
+      </section>
 
-      {/* BITÁCORA DE AUDITORÍA Y TRAZABILIDAD DEL EXPEDIENTE */}
+      {/* BITÁCORA DE AUDITORÍA */}
       <section className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 sm:p-8 shadow-2xs space-y-5">
         <div className="flex items-center justify-between border-b border-brand-platinum pb-4">
           <div className="flex items-center gap-3">
@@ -1454,8 +1736,7 @@ function AdminCaseWorkspaceContent() {
                 eventos)
               </h3>
               <p className="text-xs text-brand-charcoal/70">
-                Historial cronológico inmutable de todas las acciones sobre este
-                caso.
+                Historial cronológico inmutable de todas las acciones sobre este caso.
               </p>
             </div>
           </div>
@@ -1495,11 +1776,14 @@ function AdminCaseWorkspaceContent() {
         )}
       </section>
 
-      {/* VISUALIZADOR INTERNO DE DOCUMENTOS DEL CASO (SE CIERRA CON ESC) */}
-      {previewVaultDoc && (
+      {/* VISUALIZADOR INTERNO */}
+      {(previewVaultDoc || previewDeliverable) && (
         <div
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 sm:p-8"
-          onClick={() => setPreviewVaultDoc(null)}
+          onClick={() => {
+            setPreviewVaultDoc(null);
+            setPreviewDeliverable(null);
+          }}
         >
           <div
             className="w-full max-w-5xl rounded-3xl bg-brand-white border border-brand-charcoal/20 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
@@ -1508,16 +1792,17 @@ function AdminCaseWorkspaceContent() {
             <div className="flex items-center justify-between px-6 py-4 bg-brand-charcoal text-white">
               <div className="min-w-0 pr-4">
                 <span className="font-mono text-[10px] font-bold uppercase text-brand-red block">
-                  AUDITORÍA BÓVEDA PII • PRESIONA ESC PARA CERRAR
+                  VISOR OFICIAL • PRESIONA ESC PARA CERRAR
                 </span>
                 <h3 className="font-display text-base font-bold truncate">
-                  {previewVaultDoc.title} — {previewVaultDoc.fileName}
+                  {previewVaultDoc?.title || previewDeliverable?.label} —{" "}
+                  {previewVaultDoc?.fileName || previewDeliverable?.fileName}
                 </h3>
               </div>
               <div className="flex items-center gap-3 shrink-0">
-                {previewVaultDoc.fileUrl && (
+                {(previewVaultDoc?.fileUrl || previewDeliverable?.fileUrl) && (
                   <a
-                    href={previewVaultDoc.fileUrl}
+                    href={previewVaultDoc?.fileUrl || previewDeliverable?.fileUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 rounded-full bg-white/10 hover:bg-brand-red px-4 py-1.5 text-xs font-bold text-white transition-colors"
@@ -1528,8 +1813,11 @@ function AdminCaseWorkspaceContent() {
                 )}
                 <button
                   type="button"
-                  onClick={() => setPreviewVaultDoc(null)}
-                  className="rounded-xl bg-white/10 hover:bg-brand-red p-2 text-white transition-colors"
+                  onClick={() => {
+                    setPreviewVaultDoc(null);
+                    setPreviewDeliverable(null);
+                  }}
+                  className="rounded-xl bg-white/10 hover:bg-brand-red p-2 text-white transition-colors cursor-pointer"
                   aria-label="Cerrar visualizador (Esc)"
                 >
                   <X className="h-5 w-5" />
@@ -1539,8 +1827,8 @@ function AdminCaseWorkspaceContent() {
 
             <div className="flex-1 bg-brand-platinum overflow-auto min-h-[72vh] flex items-center justify-center">
               <iframe
-                src={previewVaultDoc.fileUrl}
-                title={previewVaultDoc.title}
+                src={previewVaultDoc?.fileUrl || previewDeliverable?.fileUrl}
+                title={previewVaultDoc?.title || previewDeliverable?.label}
                 className="w-full h-[78vh] border-0 bg-white"
               />
             </div>

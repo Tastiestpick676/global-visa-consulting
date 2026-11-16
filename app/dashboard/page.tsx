@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   Video,
   ExternalLink,
+  FileCheck2,
 } from "lucide-react";
 
 export default function ClientDashboardHomePage() {
@@ -34,6 +35,11 @@ export default function ClientDashboardHomePage() {
   const metrics = calculateApplicationMetrics(application);
 
   const [advisorAvatar, setAdvisorAvatar] = useState<string>("");
+  const [nowTime, setNowTime] = useState<number>(0);
+
+  useEffect(() => {
+    setNowTime(Date.now());
+  }, []);
 
   const clientName = formatDisplayName(
     application?.formData?.fullName ||
@@ -49,7 +55,6 @@ export default function ClientDashboardHomePage() {
         : "")
   );
 
-  // Buscar la foto real del asesor asignado en Firestore
   useEffect(() => {
     const loadAdvisorPhoto = async () => {
       if (application?.assignedAdvisorPhotoUrl) {
@@ -142,14 +147,22 @@ export default function ClientDashboardHomePage() {
   const deliverables = Array.isArray(application?.officialDeliverables)
     ? application.officialDeliverables
     : [];
-  const meetings = Array.isArray(application?.meetings)
+
+  const rawMeetings = Array.isArray(application?.meetings)
     ? application.meetings
     : [];
+    
+  const upcomingMeetings = rawMeetings.filter((m) => {
+    if (m.completed) return false;
+    if (!nowTime) return true;
+    const meetingDate = new Date(m.dateTime).getTime();
+    return !isNaN(meetingDate) && meetingDate >= nowTime;
+  });
 
   return (
     <DashboardLayout>
       <div className="space-y-8 font-sans">
-        {/* BANNER PRINCIPAL CON SALUDO EN DOS LÍNEAS */}
+        {/* BANNER PRINCIPAL */}
         <div className="rounded-3xl bg-brand-charcoal text-brand-white p-6 sm:p-8 border border-white/10 shadow-lg space-y-6">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             <div className="space-y-2 max-w-2xl">
@@ -216,7 +229,7 @@ export default function ClientDashboardHomePage() {
                 <Link
                   key={st.num}
                   href={st.href}
-                  className={`rounded-2xl p-4 border transition-all flex flex-col justify-between gap-3 ${
+                  className={`rounded-2xl p-4 border transition-all flex flex-col justify-between gap-3 cursor-pointer ${
                     isCurrent
                       ? "bg-brand-red text-white border-brand-red shadow-md"
                       : isCompleted
@@ -250,7 +263,7 @@ export default function ClientDashboardHomePage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <Link
             href="/dashboard/formulario"
-            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all"
+            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all cursor-pointer"
           >
             <div className="space-y-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-charcoal group-hover:bg-brand-red text-white transition-colors">
@@ -273,7 +286,7 @@ export default function ClientDashboardHomePage() {
 
           <Link
             href="/dashboard/boveda"
-            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all"
+            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all cursor-pointer"
           >
             <div className="space-y-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-charcoal group-hover:bg-brand-red text-white transition-colors">
@@ -298,7 +311,7 @@ export default function ClientDashboardHomePage() {
 
           <Link
             href="/dashboard/sala-entrenamiento"
-            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all"
+            className="group rounded-3xl bg-brand-white border-2 border-brand-charcoal/12 hover:border-brand-red p-6 shadow-2xs flex flex-col justify-between gap-5 transition-all cursor-pointer"
           >
             <div className="space-y-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-charcoal group-hover:bg-brand-red text-white transition-colors">
@@ -313,18 +326,21 @@ export default function ClientDashboardHomePage() {
               </p>
             </div>
             <div className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-red">
-              <span>Ir a la Sala Consular ({meetings.length} sesiones)</span>
+              <span>Ir a la Sala Consular ({upcomingMeetings.length} próximas)</span>
               <ArrowRight className="h-3.5 w-3.5" />
             </div>
           </Link>
         </div>
 
-        {/* RESUMEN DE ENTREGABLES Y ASESORÍA TITULAR (CON FOTO REAL DEL ASESOR Y REUNIONES) */}
+        {/* RESUMEN DE ENTREGABLES OFICIALES Y ASESORÍA TITULAR */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* ENTREGABLES OFICIALES */}
           <div className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 shadow-2xs space-y-4">
             <div className="flex items-center justify-between border-b border-brand-platinum pb-3.5">
               <div className="flex items-center gap-2.5">
-                <Download className="h-4 w-4 text-brand-red" />
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-red/10 text-brand-red">
+                  <FileCheck2 className="h-4 w-4" />
+                </div>
                 <h3 className="font-display text-sm font-bold text-brand-charcoal">
                   Entregables Oficiales Listos ({deliverables.length})
                 </h3>
@@ -338,27 +354,44 @@ export default function ClientDashboardHomePage() {
             </div>
 
             {deliverables.length === 0 ? (
-              <p className="text-xs text-brand-charcoal/65 py-4">
-                Tus documentos oficiales (Confirmación DS-160 / Schedule of
-                Stay) aparecerán aquí tan pronto tu especialista los emita.
-              </p>
+              <div className="rounded-2xl bg-brand-platinum/30 p-6 text-center space-y-1">
+                <p className="text-xs font-bold text-brand-charcoal">
+                  Sin entregables oficiales emitidos aún
+                </p>
+                <p className="text-[11px] text-brand-charcoal/70">
+                  Tus documentos oficiales aparecerán aquí tan pronto tu especialista los emita.
+                </p>
+              </div>
             ) : (
-              <div className="space-y-2.5">
-                {deliverables.slice(0, 3).map((d) => (
+              <div className="space-y-3">
+                {deliverables.map((d) => (
                   <div
                     key={d.id}
-                    className="flex items-center justify-between rounded-xl bg-brand-platinum/50 px-4 py-3 text-xs"
+                    className="flex items-center justify-between gap-3 rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10 transition-all hover:border-brand-charcoal/20"
                   >
-                    <span className="font-bold text-brand-charcoal truncate pr-3">
-                      {d.label}
-                    </span>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-charcoal text-white">
+                        <FileText className="h-4 w-4 text-brand-red" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-brand-charcoal truncate">
+                          {d.label}
+                        </p>
+                        <p className="text-[10px] text-brand-charcoal/60">
+                          {d.fileName || "Documento oficial"} • Emitido por {formatDisplayName(d.uploadedBy || "Especialista")}
+                        </p>
+                      </div>
+                    </div>
+
                     <a
                       href={d.fileUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="rounded-full bg-brand-red px-3.5 py-1.5 text-[11px] font-bold text-white shrink-0"
+                      download
+                      className="inline-flex items-center gap-1.5 rounded-full bg-brand-red hover:bg-brand-red/90 px-4 py-2 text-xs font-bold text-white transition-all shrink-0 shadow-sm"
                     >
-                      Descargar
+                      <Download className="h-3.5 w-3.5" />
+                      <span>Descargar</span>
                     </a>
                   </div>
                 ))}
@@ -366,12 +399,15 @@ export default function ClientDashboardHomePage() {
             )}
           </div>
 
+          {/* ASESORÍA TITULAR & PRÓXIMAS REUNIONES */}
           <div className="rounded-3xl bg-brand-white border border-brand-charcoal/10 p-6 shadow-2xs space-y-4">
             <div className="flex items-center justify-between border-b border-brand-platinum pb-3.5">
               <div className="flex items-center gap-2.5">
-                <Calendar className="h-4 w-4 text-brand-red" />
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-charcoal/10 text-brand-charcoal">
+                  <Calendar className="h-4 w-4" />
+                </div>
                 <h3 className="font-display text-sm font-bold text-brand-charcoal">
-                  Asesoría Titular & Sesiones ({meetings.length})
+                  Asesoría Titular & Próximas Reuniones ({upcomingMeetings.length})
                 </h3>
               </div>
               <Link
@@ -382,7 +418,7 @@ export default function ClientDashboardHomePage() {
               </Link>
             </div>
 
-            {/* Ficha del Asesor con su Fotografía Real */}
+            {/* Ficha del Asesor */}
             <div className="flex items-center justify-between rounded-2xl bg-brand-platinum/40 p-4 border border-brand-charcoal/10">
               <div className="flex items-center gap-3.5">
                 <div className="relative shrink-0">
@@ -434,19 +470,24 @@ export default function ClientDashboardHomePage() {
               </span>
             </div>
 
-            {/* Lista de Reuniones Agendadas visibles directamente desde el Resumen */}
-            {meetings.length > 0 && (
-              <div className="space-y-2 pt-1">
-                {meetings.slice(0, 2).map((m) => (
+            {/* Únicamente Próximas Reuniones */}
+            {upcomingMeetings.length === 0 ? (
+              <div className="rounded-2xl bg-brand-platinum/30 p-4 text-center text-xs text-brand-charcoal/65">
+                No tienes reuniones próximas agendadas en este momento.
+              </div>
+            ) : (
+              <div className="space-y-2.5 pt-1">
+                {upcomingMeetings.map((m) => (
                   <div
                     key={m.id}
-                    className="flex items-center justify-between gap-3 rounded-xl bg-brand-platinum/30 px-3.5 py-2.5 border border-brand-charcoal/10 text-xs"
+                    className="flex items-center justify-between gap-3 rounded-2xl bg-brand-platinum/30 px-4 py-3 border border-brand-charcoal/10 text-xs"
                   >
                     <div className="min-w-0">
                       <p className="font-bold text-brand-charcoal truncate">
                         {m.title}
                       </p>
                       <p className="text-[11px] text-brand-charcoal/65">
+                        📅{" "}
                         {new Date(m.dateTime).toLocaleString("es-CO", {
                           dateStyle: "medium",
                           timeStyle: "short",
@@ -458,11 +499,11 @@ export default function ClientDashboardHomePage() {
                         href={m.meetUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded-full bg-brand-charcoal hover:bg-brand-red px-3 py-1.5 text-[11px] font-bold text-white shrink-0 transition-colors"
+                        className="inline-flex items-center gap-1 rounded-full bg-brand-charcoal hover:bg-brand-red px-3.5 py-2 text-[11px] font-bold text-white shrink-0 transition-colors shadow-xs"
                       >
-                        <Video className="h-3 w-3" />
+                        <Video className="h-3.5 w-3.5 text-brand-red" />
                         <span>Meet</span>
-                        <ExternalLink className="h-2.5 w-2.5" />
+                        <ExternalLink className="h-3 w-3" />
                       </a>
                     )}
                   </div>
