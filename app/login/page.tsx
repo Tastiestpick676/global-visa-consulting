@@ -32,6 +32,7 @@ import { getWhatsAppUrl } from "@/lib/constants";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 5 * 60 * 1000;
 const OTP_LENGTH = 6;
+const RESEND_COOLDOWN_SECONDS = 30; // 30 segundos de bloqueo para el reenvío
 
 export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "forgot" | "2fa">("login");
@@ -60,6 +61,9 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [resendingOtp, setResendingOtp] = useState(false);
   const [resendFeedback, setResendFeedback] = useState("");
+
+  // Estado para la cuenta regresiva del botón de reenvío OTP
+  const [resendCountdown, setResendCountdown] = useState(0);
 
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
@@ -126,6 +130,7 @@ export default function LoginPage() {
       setDevOtpPreview(undefined);
       setOtpDigits(Array(OTP_LENGTH).fill(""));
       setResendFeedback("");
+      setResendCountdown(0);
     }
   }, [loading, user, mode]);
 
@@ -190,6 +195,15 @@ export default function LoginPage() {
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
   }, [lockoutUntil]);
+
+  // Efecto para gestionar la cuenta regresiva de 30s del botón de reenvío OTP
+  useEffect(() => {
+    if (resendCountdown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCountdown]);
 
   const registerFailedAttempt = async (
     targetEmail: string,
@@ -261,6 +275,9 @@ export default function LoginPage() {
       if (res.devOtpPreview) {
         setDevOtpPreview(res.devOtpPreview);
       }
+
+      // Activamos el cooldown de 30s al enviar o reenviar exitosamente el código
+      setResendCountdown(RESEND_COOLDOWN_SECONDS);
 
       if (isManualResend) {
         setResendFeedback(
@@ -339,7 +356,6 @@ export default function LoginPage() {
       return;
     }
 
-    // Si el usuario o autocompletado inserta varios dígitos de golpe
     if (clean.length > 1) {
       const chars = clean.slice(0, OTP_LENGTH).split("");
       const next = [...otpDigits];
@@ -484,6 +500,7 @@ export default function LoginPage() {
       setOtpDigits(Array(OTP_LENGTH).fill(""));
       setOtpChallengeToken("");
       setPendingUserMeta(null);
+      setResendCountdown(0);
       setMode("login");
 
       router.replace(targetRoute);
@@ -502,6 +519,7 @@ export default function LoginPage() {
     setError("");
     setResendFeedback("");
     setSubmitting(false);
+    setResendCountdown(0);
     setMode("login");
     await signOut();
   };
@@ -769,7 +787,7 @@ export default function LoginPage() {
                 </span>
                 <button
                   type="button"
-                  disabled={submitting || resendingOtp || isLocked}
+                  disabled={submitting || resendingOtp || isLocked || resendCountdown > 0}
                   onClick={() => dispatchTwoFactorOtp(pendingUserMeta, true)}
                   className="inline-flex items-center gap-1.5 font-bold text-brand-red hover:underline disabled:opacity-50 cursor-pointer"
                 >
@@ -781,6 +799,8 @@ export default function LoginPage() {
                   <span>
                     {resendingOtp
                       ? "Enviando nuevo código..."
+                      : resendCountdown > 0
+                      ? `Reenviar en ${resendCountdown}s`
                       : "Reenviar nuevo código"}
                   </span>
                 </button>
